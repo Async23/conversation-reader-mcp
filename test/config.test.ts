@@ -13,6 +13,7 @@ test("uses an owned Obscura sidecar by default", () => {
   assert.equal(config.mcpPort, 47831);
   assert.equal(config.mcpSessionIdleMs, 1_800_000);
   assert.equal(config.daemonIdleMs, 600_000);
+  assert.equal(config.daemonStartTimeoutMs, 120_000);
   assert.equal(config.obscuraBinary, undefined);
   assert.equal(config.obscuraCdpUrl, undefined);
   assert.equal(config.outputTimezone, "UTC");
@@ -138,6 +139,29 @@ test("loads and validates the on-demand daemon idle timeout", () => {
     (error) =>
       error instanceof ConfigError &&
       error.message.includes("READ_MY_CHATGPT_DAEMON_IDLE_MS"),
+  );
+});
+
+test("loads and validates the on-demand daemon startup timeout", () => {
+  assert.equal(
+    loadConfig({
+      READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
+      READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS: "250",
+    }).daemonStartTimeoutMs,
+    250,
+  );
+
+  assert.throws(
+    () =>
+      loadConfig({
+        READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
+        READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS: "99",
+      }),
+    (error) =>
+      error instanceof ConfigError &&
+      error.message.includes(
+        "READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS",
+      ),
   );
 });
 

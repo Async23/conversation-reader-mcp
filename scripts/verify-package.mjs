@@ -264,6 +264,10 @@ process.on("SIGTERM", () => {
       "600000",
     );
     assert.equal(
+      serviceConfig.READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS,
+      "120000",
+    );
+    assert.equal(
       serviceConfig.READ_MY_CHATGPT_OBSCURA_BIN,
       join(
         xdgDataHome,
@@ -332,6 +336,7 @@ process.on("SIGTERM", () => {
       },
     );
 
+    await stopChild(health);
     const doctor = run(executable, ["doctor", "--json"], {
       cwd: lifecycleRoot,
       env,

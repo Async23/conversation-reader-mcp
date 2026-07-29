@@ -14,6 +14,10 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import {
+  createDaemonHealthProof,
+  DAEMON_HEALTH_PROTOCOL,
+} from "../src/daemon-health.js";
 import { PACKAGE_VERSION } from "../src/version.js";
 
 test("init writes an on-demand connector config and removes the persistent service", async (t) => {
@@ -80,6 +84,32 @@ exit 0
 
   let shutdownRequests = 0;
   const activeDaemon = createHttpServer((request, response) => {
+    const requestUrl = new URL(
+      request.url ?? "/",
+      "http://127.0.0.1",
+    );
+    if (
+      requestUrl.pathname === "/healthz" &&
+      request.method === "GET"
+    ) {
+      const challenge = requestUrl.searchParams.get("challenge") ?? "";
+      response.writeHead(200, {
+        "content-type": "application/json",
+      });
+      response.end(
+        JSON.stringify({
+          status: "ok",
+          server: "read-my-chatgpt",
+          protocol: DAEMON_HEALTH_PROTOCOL,
+          proof: createDaemonHealthProof(
+            "old-bearer-token",
+            challenge,
+            "ok",
+          ),
+        }),
+      );
+      return;
+    }
     if (request.url === "/shutdown" && request.method === "POST") {
       assert.equal(
         request.headers.authorization,
@@ -170,6 +200,10 @@ exit 0
     environment.READ_MY_CHATGPT_DAEMON_IDLE_MS,
     "600000",
   );
+  assert.equal(
+    environment.READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS,
+    "120000",
+  );
   assert.equal((await stat(serviceConfigPath)).mode & 0o777, 0o600);
 
   const codexConfig = await readFile(
@@ -233,6 +267,111 @@ exit 0
       detail: "stopped (starts on first tool call)",
     },
   );
+});
+
+test("init does not reveal an existing bearer token to a forged daemon", async (t) => {
+  if (process.platform !== "darwin" && process.platform !== "linux") {
+    t.skip("init is supported on macOS and Linux");
+    return;
+  }
+
+  const home = await mkdtemp(join(tmpdir(), "read-my-chatgpt-forged-init-"));
+  const configHome = join(home, ".config");
+  const dataHome = join(home, ".local", "share");
+  const binDirectory = join(home, "bin");
+  const obscuraBinary = join(binDirectory, "obscura");
+  await mkdir(binDirectory, { recursive: true });
+  await writeFile(
+    obscuraBinary,
+    `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "obscura 0.1.10"
+elif [ "$1" = "serve" ] && [ "$2" = "--help" ]; then
+  echo "--host --port --storage-dir --quiet --stealth"
+else
+  exit 2
+fi
+`,
+  );
+  await chmod(obscuraBinary, 0o700);
+
+  const managerName =
+    process.platform === "darwin" ? "launchctl" : "systemctl";
+  const managerPath = join(binDirectory, managerName);
+  await writeFile(managerPath, "#!/bin/sh\nexit 0\n");
+  await chmod(managerPath, 0o700);
+
+  const authorizations: string[] = [];
+  const forgedDaemon = createHttpServer((request, response) => {
+    if (request.headers.authorization) {
+      authorizations.push(request.headers.authorization);
+    }
+    if (request.url === "/healthz") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          status: "ok",
+          server: "read-my-chatgpt",
+        }),
+      );
+      return;
+    }
+    response.writeHead(404);
+    response.end();
+  });
+  forgedDaemon.listen(0, "127.0.0.1");
+  await once(forgedDaemon, "listening");
+  const forgedAddress = forgedDaemon.address();
+  assert(forgedAddress && typeof forgedAddress === "object");
+
+  t.after(async () => {
+    await new Promise<void>((resolve) => {
+      forgedDaemon.close(() => resolve());
+    });
+    await rm(home, { recursive: true, force: true });
+  });
+
+  const serviceConfigDirectory = join(
+    configHome,
+    "read-my-chatgpt",
+  );
+  await mkdir(serviceConfigDirectory, { recursive: true });
+  await writeFile(
+    join(serviceConfigDirectory, "service.json"),
+    `${JSON.stringify({
+      READ_MY_CHATGPT_ACCESS_TOKEN: "old-access-token",
+      READ_MY_CHATGPT_MCP_TRANSPORT: "http",
+      READ_MY_CHATGPT_MCP_HOST: "127.0.0.1",
+      READ_MY_CHATGPT_MCP_PORT: String(forgedAddress.port),
+      READ_MY_CHATGPT_MCP_BEARER_TOKEN: "must-not-leak",
+    })}\n`,
+    { mode: 0o600 },
+  );
+
+  const result = await runCli(
+    [
+      "init",
+      "--yes",
+      "--no-configure",
+      "--port",
+      String(forgedAddress.port),
+    ],
+    {
+      ...process.env,
+      HOME: home,
+      XDG_CONFIG_HOME: configHome,
+      XDG_DATA_HOME: dataHome,
+      PATH: `${binDirectory}:${process.env.PATH ?? ""}`,
+      READ_MY_CHATGPT_ACCESS_TOKEN: "new-access-token",
+      READ_MY_CHATGPT_OBSCURA_BIN: obscuraBinary,
+    },
+  );
+  assert.equal(
+    result.code,
+    0,
+    `stdout:\n${result.stdout}\nstderr:\n${result.stderr}`,
+  );
+  assert.deepEqual(authorizations, []);
 });
 
 async function runCli(

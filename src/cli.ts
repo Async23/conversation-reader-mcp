@@ -14,6 +14,10 @@ import {
 } from "./client-config.js";
 import { startConnectorMcpServer } from "./connector.js";
 import { ConfigError, loadConfig } from "./config.js";
+import {
+  DaemonHealthVerificationError,
+  fetchVerifiedDaemonHealth,
+} from "./daemon-health.js";
 import { startHttpMcpServer } from "./http-server.js";
 import { migrateLegacyInstallation } from "./install-migration.js";
 import {
@@ -182,6 +186,7 @@ async function runConnector(configPath?: string): Promise<void> {
       error instanceof Error ? error.message : String(error),
     );
   }
+  assertOnDemandConfig(config);
 
   const running = await startConnectorMcpServer(
     config,
@@ -206,11 +211,7 @@ async function runMcpDaemon(configPath?: string): Promise<void> {
   );
 
   const config = loadConfig();
-  if (config.mcpTransport !== "http") {
-    throw new ConfigError(
-      "The on-demand daemon requires READ_MY_CHATGPT_MCP_TRANSPORT=http.",
-    );
-  }
+  assertOnDemandConfig(config);
 
   const runtime = await ReadMyChatGptRuntime.create(config);
   const running = await startHttpMcpServer(runtime, {
@@ -316,6 +317,10 @@ async function init(options: InitOptions): Promise<void> {
       process.env.READ_MY_CHATGPT_DAEMON_IDLE_MS?.trim() ||
       existing?.READ_MY_CHATGPT_DAEMON_IDLE_MS ||
       "600000",
+    READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS:
+      process.env.READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS?.trim() ||
+      existing?.READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS ||
+      "120000",
   };
   const maxAssetBytes =
     process.env.READ_MY_CHATGPT_MAX_ASSET_BYTES?.trim() ||
@@ -504,7 +509,10 @@ async function doctor(json: boolean): Promise<boolean> {
   if (environment) {
     const endpoint = endpointFor(environment);
     try {
-      await fetchHealth(endpoint);
+      await fetchHealth(
+        endpoint,
+        environment.READ_MY_CHATGPT_MCP_BEARER_TOKEN,
+      );
       checks.push({
         name: "on-demand-daemon",
         ok: true,
@@ -652,6 +660,21 @@ function endpointFor(environment: ServiceEnvironment): string {
   return `http://${formatHost(host)}:${port}/mcp`;
 }
 
+function assertOnDemandConfig(
+  config: ReturnType<typeof loadConfig>,
+): void {
+  if (config.mcpTransport !== "http") {
+    throw new ConfigError(
+      "The on-demand daemon requires READ_MY_CHATGPT_MCP_TRANSPORT=http.",
+    );
+  }
+  if (!config.mcpBearerToken) {
+    throw new ConfigError(
+      "The on-demand daemon requires READ_MY_CHATGPT_MCP_BEARER_TOKEN.",
+    );
+  }
+}
+
 async function stopOnDemandDaemon(
   environment: ServiceEnvironment | undefined,
 ): Promise<void> {
@@ -666,36 +689,49 @@ async function stopOnDemandDaemon(
   const shutdownUrl = new URL("/shutdown", endpoint);
   const bearerToken =
     environment.READ_MY_CHATGPT_MCP_BEARER_TOKEN?.trim();
-  let response: Response;
+  if (!bearerToken) return;
+
+  let status: "ok" | "stopping";
   try {
-    response = await fetch(shutdownUrl, {
-      method: "POST",
-      headers: bearerToken
-        ? { Authorization: `Bearer ${bearerToken}` }
-        : undefined,
-      signal: AbortSignal.timeout(2_000),
-    });
+    status = await fetchVerifiedDaemonHealth(
+      new URL("/healthz", endpoint),
+      bearerToken,
+      2_000,
+    );
   } catch (error) {
-    if (hasNodeErrorCode(error, "ECONNREFUSED")) return;
+    if (
+      hasNodeErrorCode(error, "ECONNREFUSED") ||
+      error instanceof DaemonHealthVerificationError
+    ) {
+      return;
+    }
     throw error;
   }
 
-  // Persistent pre-on-demand versions do not expose this endpoint.
-  // Their launchd/systemd service is stopped immediately afterwards.
-  if (response.status === 404) return;
-  if (!response.ok) {
-    throw new Error(
-      `Could not stop the on-demand daemon: HTTP ${response.status}`,
-    );
+  let response: Response;
+  if (status === "ok") {
+    try {
+      response = await fetch(shutdownUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${bearerToken}` },
+        signal: AbortSignal.timeout(2_000),
+      });
+    } catch (error) {
+      if (hasNodeErrorCode(error, "ECONNREFUSED")) return;
+      throw error;
+    }
+    if (!response.ok) {
+      throw new Error(
+        `Could not stop the on-demand daemon: HTTP ${response.status}`,
+      );
+    }
   }
 
   const healthUrl = new URL("/healthz", endpoint);
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await fetch(healthUrl, {
-        signal: AbortSignal.timeout(500),
-      });
+      await fetchVerifiedDaemonHealth(healthUrl, bearerToken, 500);
     } catch (error) {
       if (
         hasNodeErrorCode(error, "ECONNREFUSED") ||
@@ -710,20 +746,21 @@ async function stopOnDemandDaemon(
   throw new Error("Timed out stopping the on-demand daemon.");
 }
 
-async function fetchHealth(endpoint: string): Promise<void> {
-  const healthUrl = new URL("/healthz", endpoint);
-  const response = await fetch(healthUrl, {
-    signal: AbortSignal.timeout(2_000),
-  });
-  if (!response.ok) {
-    throw new Error(`HTTP ${response.status}`);
+async function fetchHealth(
+  endpoint: string,
+  bearerToken: string | undefined,
+): Promise<void> {
+  if (!bearerToken?.trim()) {
+    throw new Error("daemon bearer token is not configured");
   }
-  const body = (await response.json()) as {
-    status?: unknown;
-    server?: unknown;
-  };
-  if (body.status !== "ok" || body.server !== PRODUCT) {
-    throw new Error("unexpected health response");
+  const healthUrl = new URL("/healthz", endpoint);
+  const status = await fetchVerifiedDaemonHealth(
+    healthUrl,
+    bearerToken,
+    2_000,
+  );
+  if (status !== "ok") {
+    throw new Error("daemon is stopping");
   }
 }
 

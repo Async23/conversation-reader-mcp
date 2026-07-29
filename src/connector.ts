@@ -34,22 +34,26 @@ export async function startConnectorMcpServer(
   server.registerTool(
     "list_conversations",
     listConversationsToolDefinition(config.outputTimezone),
-    (args) => daemon.callTool("list_conversations", args),
+    (args, extra) =>
+      daemon.callTool("list_conversations", args, extra.signal),
   );
   server.registerTool(
     "get_conversation",
     getConversationToolDefinition(config.outputTimezone),
-    (args) => daemon.callTool("get_conversation", args),
+    (args, extra) =>
+      daemon.callTool("get_conversation", args, extra.signal),
   );
   server.registerTool(
     "get_asset",
     getAssetToolDefinition(),
-    (args) => daemon.callTool("get_asset", args),
+    (args, extra) =>
+      daemon.callTool("get_asset", args, extra.signal),
   );
   server.registerTool(
     "search_conversations",
     searchConversationsToolDefinition(config.outputTimezone),
-    (args) => daemon.callTool("search_conversations", args),
+    (args, extra) =>
+      daemon.callTool("search_conversations", args, extra.signal),
   );
 
   const transport = new StdioServerTransport();

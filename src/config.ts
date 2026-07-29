@@ -14,6 +14,7 @@ export type Config = {
   mcpBearerToken?: string;
   mcpSessionIdleMs: number;
   daemonIdleMs: number;
+  daemonStartTimeoutMs: number;
   obscuraBinary?: string;
   obscuraCdpUrl?: string;
   obscuraStorageDir?: string;
@@ -132,6 +133,24 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
 
+  const daemonStartTimeoutMsValue = (
+    env.READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS ?? "120000"
+  ).trim();
+  if (!/^\d+$/.test(daemonStartTimeoutMsValue)) {
+    throw new ConfigError(
+      "READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS must be an integer of at least 100.",
+    );
+  }
+  const daemonStartTimeoutMs = Number(daemonStartTimeoutMsValue);
+  if (
+    !Number.isSafeInteger(daemonStartTimeoutMs) ||
+    daemonStartTimeoutMs < 100
+  ) {
+    throw new ConfigError(
+      "READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS must be an integer of at least 100.",
+    );
+  }
+
   const maxAssetBytesValue = (
     env.READ_MY_CHATGPT_MAX_ASSET_BYTES ?? "10485760"
   ).trim();
@@ -189,6 +208,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     ),
     mcpSessionIdleMs,
     daemonIdleMs,
+    daemonStartTimeoutMs,
     obscuraBinary: optionalValue("READ_MY_CHATGPT_OBSCURA_BIN"),
     obscuraCdpUrl,
     obscuraStorageDir: optionalValue(

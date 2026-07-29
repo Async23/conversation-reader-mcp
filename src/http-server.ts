@@ -5,6 +5,12 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import type { Request, Response } from "express";
+import {
+  createDaemonHealthProof,
+  DAEMON_HEALTH_PROTOCOL,
+  isDaemonHealthChallenge,
+  type DaemonHealthState,
+} from "./daemon-health.js";
 import { SERVICE_NAME } from "./install-paths.js";
 import type { ReadMyChatGptRuntime } from "./runtime.js";
 import type { RunningMcpServer } from "./stdio-server.js";
@@ -52,13 +58,30 @@ export async function startHttpMcpServer(
     resolveIdle = resolve;
   });
 
-  app.get("/healthz", (_request, response) => {
+  app.get("/healthz", (request, response) => {
+    const status: DaemonHealthState =
+      closing || shutdownRequested ? "stopping" : "ok";
+    const challenge = request.query.challenge;
+    const proof =
+      options.bearerToken &&
+      isDaemonHealthChallenge(challenge)
+        ? createDaemonHealthProof(
+            options.bearerToken,
+            challenge,
+            status,
+          )
+        : undefined;
     response.json({
-      status:
-        closing || shutdownRequested ? "stopping" : "ok",
+      status,
       server: SERVICE_NAME,
       transport: "streamable-http",
       sessions: sessions.size,
+      ...(proof
+        ? {
+            protocol: DAEMON_HEALTH_PROTOCOL,
+            proof,
+          }
+        : {}),
     });
   });
 

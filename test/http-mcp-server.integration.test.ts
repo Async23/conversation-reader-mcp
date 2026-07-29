@@ -4,6 +4,11 @@ import test from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { loadConfig } from "../src/config.js";
+import {
+  createDaemonHealthChallenge,
+  DAEMON_HEALTH_PROTOCOL,
+  validDaemonHealthProof,
+} from "../src/daemon-health.js";
 import { startHttpMcpServer } from "../src/http-server.js";
 import { ReadMyChatGptRuntime } from "../src/runtime.js";
 
@@ -108,6 +113,30 @@ test("one HTTP runtime serves independent authenticated MCP sessions", async () 
       transport: "streamable-http",
       sessions: 0,
     });
+
+    const challenge = createDaemonHealthChallenge();
+    const challengedHealthUrl = new URL("/healthz", running.url);
+    challengedHealthUrl.searchParams.set("challenge", challenge);
+    const challengedHealth = await fetch(challengedHealthUrl);
+    assert.equal(challengedHealth.status, 200);
+    const challengedBody = (await challengedHealth.json()) as {
+      status: "ok";
+      protocol?: unknown;
+      proof?: unknown;
+    };
+    assert.equal(
+      challengedBody.protocol,
+      DAEMON_HEALTH_PROTOCOL,
+    );
+    assert.equal(
+      validDaemonHealthProof(
+        challengedBody.proof,
+        bearerToken,
+        challenge,
+        challengedBody.status,
+      ),
+      true,
+    );
 
     const unauthorized = await fetch(running.url, {
       method: "POST",

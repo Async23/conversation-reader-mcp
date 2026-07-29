@@ -236,7 +236,8 @@ client 仍保持连接也一样。下一次调用会透明地重新启动并重�
 
 `tools/list`、ping 和其他握手流量不会延长这 10 分钟。正在执行的 tool 不会被
 空闲定时器中断；计时从最后一个并发 tool 完成后开始。可用
-`READ_MY_CHATGPT_DAEMON_IDLE_MS` 调整超时。
+`READ_MY_CHATGPT_DAEMON_IDLE_MS` 调整空闲超时。冷启动默认最多等待 2 分钟，
+可用 `READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS` 调整。
 
 ChatGPT access token 只经本机 CDP 注入页面内 XHR，不放进 Obscura argv 或
 日志。
