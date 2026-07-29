@@ -1,6 +1,6 @@
 {
   "name": "read-my-chatgpt",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Local read-only MCP bridge for your ChatGPT web conversation history",
   "type": "module",
   "bin": {
@@ -55,7 +55,7 @@
     "provenance": true
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
     "express": "^5.2.1",
     "ws": "^8.21.1",
     "zod": "^4.0.0"

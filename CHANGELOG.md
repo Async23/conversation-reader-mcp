@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-07-29
+
 ### Added
 
 - Add a lightweight stdio `connect` command that advertises tools without
@@ -28,6 +30,20 @@
 - Stop installing launchd or systemd user services. `init` removes an existing
   persistent service when upgrading and keeps only local secrets, Obscura, and
   client configuration.
+
+### Fixed
+
+- Keep the daemon startup lock alive during slow cold starts and terminate the
+  complete detached process group before releasing the lock after a timeout.
+- Stop retrying tool calls when a connector is closing or the caller cancelled,
+  forward cancellation to the shared daemon, and allow long calls up to 10
+  minutes instead of the SDK's 60-second default.
+
+### Security
+
+- Authenticate daemon health checks with a random HMAC challenge before trusting
+  the endpoint or sending its bearer token to MCP and shutdown routes.
+- Update the MCP SDK and vulnerable transitive dependencies to patched versions.
 
 ## [0.3.0] - 2026-07-23
 
@@ -91,7 +107,8 @@
   CLI, OpenCode, and Pi.
 - Read-only conversation listing, retrieval, and title search tools.
 
-[Unreleased]: https://github.com/Async23/read-my-chatgpt/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/Async23/read-my-chatgpt/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Async23/read-my-chatgpt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Async23/read-my-chatgpt/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Async23/read-my-chatgpt/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/Async23/read-my-chatgpt/compare/v0.1.1...v0.2.0
