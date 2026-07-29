@@ -1,9 +1,12 @@
+import { canonicalTimeZone } from "./timestamp.js";
+
 export type ChatGPTTransportKind = "obscura" | "direct";
 export type McpTransportKind = "stdio" | "http";
 
 export type Config = {
   accessToken: string;
   baseUrl: string;
+  outputTimezone: string;
   transport: ChatGPTTransportKind;
   mcpTransport: McpTransportKind;
   mcpHost: string;
@@ -52,6 +55,16 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     const value = env[name]?.trim();
     return value || undefined;
   };
+  const requestedOutputTimezone =
+    optionalValue("READ_MY_CHATGPT_OUTPUT_TIMEZONE") ?? "UTC";
+  let outputTimezone: string;
+  try {
+    outputTimezone = canonicalTimeZone(requestedOutputTimezone);
+  } catch {
+    throw new ConfigError(
+      "READ_MY_CHATGPT_OUTPUT_TIMEZONE must be a valid IANA timezone such as 'UTC' or 'Asia/Shanghai'.",
+    );
+  }
   const mcpTransport = (
     env.READ_MY_CHATGPT_MCP_TRANSPORT ?? "stdio"
   ).trim();
@@ -150,6 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   return {
     accessToken,
     baseUrl,
+    outputTimezone,
     transport: transportValue,
     mcpTransport,
     mcpHost,

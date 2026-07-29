@@ -240,6 +240,12 @@ async function setup(options: SetupOptions): Promise<void> {
   if (maxAssetBytes) {
     environment.READ_MY_CHATGPT_MAX_ASSET_BYTES = maxAssetBytes;
   }
+  const outputTimezone =
+    process.env.READ_MY_CHATGPT_OUTPUT_TIMEZONE?.trim() ||
+    existing?.READ_MY_CHATGPT_OUTPUT_TIMEZONE;
+  if (outputTimezone) {
+    environment.READ_MY_CHATGPT_OUTPUT_TIMEZONE = outputTimezone;
+  }
   await writeServiceEnvironment(paths.serviceConfigPath, environment);
 
   await installService({

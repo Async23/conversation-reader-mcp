@@ -14,7 +14,29 @@ test("uses an owned Obscura sidecar by default", () => {
   assert.equal(config.mcpSessionIdleMs, 1_800_000);
   assert.equal(config.obscuraBinary, undefined);
   assert.equal(config.obscuraCdpUrl, undefined);
+  assert.equal(config.outputTimezone, "UTC");
   assert.equal(config.maxAssetBytes, 10 * 1024 * 1024);
+});
+
+test("loads and validates the output timezone", () => {
+  assert.equal(
+    loadConfig({
+      READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
+      READ_MY_CHATGPT_OUTPUT_TIMEZONE: "Asia/Shanghai",
+    }).outputTimezone,
+    "Asia/Shanghai",
+  );
+
+  assert.throws(
+    () =>
+      loadConfig({
+        READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
+        READ_MY_CHATGPT_OUTPUT_TIMEZONE: "Mars/Olympus_Mons",
+      }),
+    (error) =>
+      error instanceof ConfigError &&
+      error.message.includes("READ_MY_CHATGPT_OUTPUT_TIMEZONE"),
+  );
 });
 
 test("rejects unknown ChatGPT transports", () => {

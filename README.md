@@ -81,6 +81,32 @@ token 会过期。失效后重新运行 `read-my-chatgpt setup` 输入新 token�
 
 不要把 token 提交到 Git、Issue、日志或聊天消息中。
 
+## 输出时区
+
+MCP 默认以 UTC 输出 RFC 3339 时间，以保持现有调用兼容。若希望 AI 直接使用
+本地时间，可设置 IANA 时区并重新运行 `setup`：
+
+```bash
+READ_MY_CHATGPT_OUTPUT_TIMEZONE=Asia/Shanghai read-my-chatgpt setup --yes
+```
+
+已有安装会复用原来的 access token；后续再次运行 `setup` 也会保留这个配置。
+源码或 stdio 模式同样读取 `READ_MY_CHATGPT_OUTPUT_TIMEZONE`。例如上海时区会
+输出：
+
+```text
+2026-07-24T15:58:07.513+08:00
+```
+
+`get_conversation` 的 `created_at`、`updated_at` 和
+`messages[].created_at` 会使用配置时区。`list_conversations` 和
+`search_conversations` 继续保留上游 `create_time` / `update_time` 字段，
+同时新增适合展示的 `created_at` / `updated_at`。包含时间的工具结果还会返回
+`time_zone`，MCP instructions 会要求客户端优先使用格式化字段。
+
+该配置只控制 MCP 时间输出；`READ_MY_CHATGPT_OBSCURA_TIMEZONE` 控制浏览器
+sidecar，两者用途不同。
+
 ## 日常命令
 
 ```bash

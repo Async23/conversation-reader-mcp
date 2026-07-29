@@ -9,7 +9,10 @@ type BackendMode = "normal" | "no-matches" | "invalid-json";
 type ToolPayload = {
   error?: string;
   status?: number | null;
+  time_zone?: string;
   conversation_id?: string;
+  created_at?: string | null;
+  updated_at?: string | null;
   experience?: string;
   completion_status?: string;
   message_count?: number;
@@ -17,6 +20,7 @@ type ToolPayload = {
     role?: string;
     content?: string;
     content_type?: string | null;
+    created_at?: string | null;
     rich_content?: {
       links?: Array<{ kind?: string; url?: string; title?: string | null }>;
       citations?: Array<{ url?: string; reference_type?: string }>;
@@ -31,11 +35,17 @@ type ToolPayload = {
   }>;
   items?: Array<{
     id: string;
+    created_at?: string | null;
+    updated_at?: string | null;
     experience?: string;
     async_status?: string | null;
   }>;
   has_more?: boolean;
-  hits?: Array<{ conversation_id: string; experience?: string }>;
+  hits?: Array<{
+    conversation_id: string;
+    updated_at?: string | null;
+    experience?: string;
+  }>;
   scanned?: number;
   scan_cap?: number;
 };
@@ -122,6 +132,8 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
         JSON.stringify({
           conversation_id: "detail-via-xhr",
           title: "Detail through the read-only endpoint",
+          create_time: 1_704_067_200,
+          update_time: 1_704_070_800,
           conversation_origin: "tpp",
           current_node: "a1",
           mapping: {
@@ -138,6 +150,7 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
               message: {
                 id: "u1",
                 author: { role: "user" },
+                create_time: 1_704_067_200,
                 content: {
                   content_type: "multimodal_text",
                   parts: [
@@ -280,6 +293,7 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
       READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
       READ_MY_CHATGPT_BASE_URL: `http://127.0.0.1:${address.port}`,
       READ_MY_CHATGPT_TRANSPORT: "direct",
+      READ_MY_CHATGPT_OUTPUT_TIMEZONE: "Asia/Shanghai",
     },
     stderr: "pipe",
   });
@@ -301,12 +315,25 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
         const payload = parseToolPayload(result);
         assert.notEqual(result.isError, true);
         assert.equal(payload.conversation_id, "detail-via-xhr");
+        assert.equal(payload.time_zone, "Asia/Shanghai");
+        assert.equal(
+          payload.created_at,
+          "2024-01-01T08:00:00.000+08:00",
+        );
+        assert.equal(
+          payload.updated_at,
+          "2024-01-01T09:00:00.000+08:00",
+        );
         assert.equal(payload.experience, "work");
         assert.equal(payload.completion_status, "completed");
         assert.equal(payload.message_count, 2);
         assert.deepEqual(
           payload.messages?.map((message) => message.role),
           ["user", "assistant"],
+        );
+        assert.equal(
+          payload.messages?.[0]?.created_at,
+          "2024-01-01T08:00:00.000+08:00",
         );
         assert.equal(
           payload.messages?.[0]?.rich_content?.links?.[0]?.url,
@@ -331,7 +358,7 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
       },
     );
 
-    await t.test("advertises the new asset tool without changing existing tools", async () => {
+    await t.test("advertises tools and configured timestamp semantics", async () => {
       const tools = await client.listTools();
       assert.deepEqual(
         tools.tools.map((tool) => tool.name).sort(),
@@ -341,6 +368,12 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
           "list_conversations",
           "search_conversations",
         ],
+      );
+      assert.match(client.getInstructions() ?? "", /Asia\/Shanghai/);
+      assert.match(
+        tools.tools.find((tool) => tool.name === "list_conversations")
+          ?.description ?? "",
+        /created_at and updated_at are RFC 3339 timestamps in Asia\/Shanghai/,
       );
     });
 
@@ -438,6 +471,13 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
           ),
           { active: "work", archived: "unknown" },
         );
+        assert.equal(payload.time_zone, "Asia/Shanghai");
+        assert.equal(
+          payload.hits?.find(
+            (hit) => hit.conversation_id === "active",
+          )?.updated_at,
+          "1970-01-01T08:03:20.000+08:00",
+        );
         assert.deepEqual(
           [...new Set(requestedArchiveFlags)].sort(),
           ["false", "true"],
@@ -476,6 +516,11 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
       });
       const payload = parseToolPayload(result);
       assert.equal(payload.has_more, false);
+      assert.equal(payload.time_zone, "Asia/Shanghai");
+      assert.equal(
+        payload.items?.[0]?.updated_at,
+        "1970-01-01T08:03:20.000+08:00",
+      );
       assert.equal(payload.items?.[0]?.experience, "work");
     });
 

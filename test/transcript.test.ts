@@ -65,6 +65,29 @@ test("preserves meaningful leading and trailing message whitespace", () => {
   assert.equal(transcript.messages[0]?.content, text);
 });
 
+test("formats conversation and message timestamps in the configured timezone", () => {
+  const detail: ConversationDetail = {
+    conversation_id: "c1",
+    create_time: 1_704_067_200,
+    update_time: 1_704_070_800_000,
+    current_node: "u1",
+    mapping: {
+      u1: node("u1", null, "user", "Hello"),
+    },
+  };
+
+  const transcript = activeBranchTranscript(detail, {
+    timeZone: "Asia/Shanghai",
+  });
+
+  assert.equal(transcript.created_at, "2024-01-01T08:00:00.000+08:00");
+  assert.equal(transcript.updated_at, "2024-01-01T09:00:00.000+08:00");
+  assert.equal(
+    transcript.messages[0]?.created_at,
+    "2023-11-15T06:13:20.000+08:00",
+  );
+});
+
 test("still omits messages whose content is only whitespace", () => {
   const detail: ConversationDetail = {
     conversation_id: "c1",

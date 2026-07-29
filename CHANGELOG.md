@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add `READ_MY_CHATGPT_OUTPUT_TIMEZONE` for RFC 3339 conversation timestamps
+  in a validated IANA timezone, including daylight-saving offsets.
+- Add formatted `created_at` / `updated_at` fields and explicit `time_zone`
+  metadata to conversation list and search results while retaining upstream
+  timestamp fields for compatibility.
+- Advertise the configured timestamp semantics through MCP server instructions
+  and tool descriptions.
+
 ## [0.3.0] - 2026-07-23
 
 ### Added

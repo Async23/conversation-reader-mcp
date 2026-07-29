@@ -32,6 +32,7 @@ import {
 } from "./conversation-assets.js";
 import { SERVICE_NAME } from "./install-paths.js";
 import { activeBranchTranscript } from "./transcript.js";
+import { formatTimestamp } from "./timestamp.js";
 import { PACKAGE_VERSION } from "./version.js";
 
 function jsonResult(data: unknown, isError = false) {
@@ -108,10 +109,12 @@ function assetResult(
   };
 }
 
-function normalizeItem(item: ConversationListItem) {
+function normalizeItem(item: ConversationListItem, timeZone: string) {
   return {
     id: item.id,
     title: item.title?.trim() || "(untitled)",
+    created_at: formatTimestamp(item.create_time ?? null, timeZone),
+    updated_at: formatTimestamp(item.update_time ?? null, timeZone),
     create_time: item.create_time ?? null,
     update_time: item.update_time ?? null,
     is_archived: Boolean(item.is_archived),
@@ -147,6 +150,7 @@ function hasMoreConversations(
 type SearchHit = {
   conversation_id: string;
   title: string;
+  updated_at: string | null;
   update_time: ConversationTimestamp;
   is_archived: boolean;
   experience: ConversationExperience;
@@ -177,16 +181,26 @@ export function createReadMyChatGptMcpServer(
   config: Config,
   client: ChatGPTClient,
 ): McpServer {
-  const server = new McpServer({
-    name: SERVICE_NAME,
-    version: PACKAGE_VERSION,
-  });
+  const server = new McpServer(
+    {
+      name: SERVICE_NAME,
+      version: PACKAGE_VERSION,
+    },
+    {
+      instructions:
+        `Conversation timestamps are formatted in ${config.outputTimezone}. ` +
+        "When reporting time to the user, prefer created_at and updated_at. " +
+        "The create_time and update_time fields are unmodified upstream values kept for compatibility.",
+    },
+  );
 
   server.registerTool(
     "list_conversations",
     {
       description:
-        "List your ChatGPT web Chat and Work conversations (metadata only: id, title, timestamps, experience). Use when you need recent conversations or do not know a conversation_id. Does not return message bodies.",
+        `List your ChatGPT web Chat and Work conversations (metadata only: id, title, timestamps, experience). ` +
+        `created_at and updated_at are RFC 3339 timestamps in ${config.outputTimezone}; prefer them when reporting time. ` +
+        "create_time and update_time retain their upstream values for compatibility. Use when you need recent conversations or do not know a conversation_id. Does not return message bodies.",
       inputSchema: {
         offset: z
           .number()
@@ -220,8 +234,11 @@ export function createReadMyChatGptMcpServer(
           order: "updated",
           isArchived: include_archived === true ? true : false,
         });
-        const items = (data.items ?? []).map(normalizeItem);
+        const items = (data.items ?? []).map((item) =>
+          normalizeItem(item, config.outputTimezone),
+        );
         return jsonResult({
+          time_zone: config.outputTimezone,
           items,
           offset: pageOffset,
           limit: pageLimit,
@@ -244,7 +261,9 @@ export function createReadMyChatGptMcpServer(
     "get_conversation",
     {
       description:
-        "Fetch one completed ChatGPT Chat or Work conversation and return the active branch only (the current visible user/assistant turn chain). Text remains in messages[].content; links, web citations, Mermaid source, and image/file asset ids appear in messages[].rich_content when present. Internal reasoning, hidden events, and tool execution are omitted. Use get_asset to read an indexed image or file.",
+        `Fetch one completed ChatGPT Chat or Work conversation and return the active branch only (the current visible user/assistant turn chain). ` +
+        `created_at, updated_at, and messages[].created_at are RFC 3339 timestamps in ${config.outputTimezone}. ` +
+        "Text remains in messages[].content; links, web citations, Mermaid source, and image/file asset ids appear in messages[].rich_content when present. Internal reasoning, hidden events, and tool execution are omitted. Use get_asset to read an indexed image or file.",
       inputSchema: {
         conversation_id: z
           .string()
@@ -266,6 +285,7 @@ export function createReadMyChatGptMcpServer(
         const detail = await client.getConversation(conversation_id);
         const transcript = activeBranchTranscript(detail, {
           maxMessages: max_messages ?? config.defaultMaxMessages,
+          timeZone: config.outputTimezone,
         });
         return jsonResult({
           ...transcript,
@@ -314,7 +334,9 @@ export function createReadMyChatGptMcpServer(
     "search_conversations",
     {
       description:
-        "Search your ChatGPT Chat and Work conversations by title only (MVP). Returns matching conversation ids, titles, and experience. For full dialogue content, call get_conversation next.",
+        `Search your ChatGPT Chat and Work conversations by title only (MVP). ` +
+        `updated_at is an RFC 3339 timestamp in ${config.outputTimezone}; prefer it when reporting time. ` +
+        "Returns matching conversation ids, titles, and experience. For full dialogue content, call get_conversation next.",
       inputSchema: {
         query: z
           .string()
@@ -397,6 +419,10 @@ export function createReadMyChatGptMcpServer(
               scope.hits.push({
                 conversation_id: item.id,
                 title,
+                updated_at: formatTimestamp(
+                  item.update_time ?? null,
+                  config.outputTimezone,
+                ),
                 update_time: item.update_time ?? null,
                 is_archived: item.is_archived ?? scope.isArchived,
                 experience: inferConversationExperience(item),
@@ -445,6 +471,7 @@ export function createReadMyChatGptMcpServer(
 
         return jsonResult({
           query,
+          time_zone: config.outputTimezone,
           hits,
           scanned,
           scan_cap: config.searchMaxScan,

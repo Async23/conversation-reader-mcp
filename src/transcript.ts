@@ -1,7 +1,6 @@
 import type {
   ConversationDetail,
   ConversationMessageNode,
-  ConversationTimestamp,
 } from "./chatgpt-client.js";
 import {
   inferConversationCompletionStatus,
@@ -14,6 +13,7 @@ import {
   type ConversationAssetReference,
   type MessageRichContent,
 } from "./rich-content.js";
+import { formatTimestamp } from "./timestamp.js";
 
 export type TranscriptMessage = {
   role: string;
@@ -27,6 +27,7 @@ export type TranscriptMessage = {
 export type ActiveTranscript = {
   conversation_id: string;
   title: string;
+  time_zone: string;
   updated_at: string | null;
   created_at: string | null;
   branch: "active";
@@ -37,23 +38,6 @@ export type ActiveTranscript = {
   truncated: boolean;
   messages: TranscriptMessage[];
 };
-
-function isoFromTimestamp(
-  ts: ConversationTimestamp | undefined,
-): string | null {
-  if (typeof ts === "string") {
-    const ms = Date.parse(ts);
-    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
-  }
-  if (ts == null || !Number.isFinite(ts)) return null;
-  // ChatGPT sometimes returns seconds, sometimes ms-ish; treat large values as ms.
-  const ms = ts > 1e12 ? ts : ts * 1000;
-  try {
-    return new Date(ms).toISOString();
-  } catch {
-    return null;
-  }
-}
 
 const INTERNAL_CONTENT_TYPES = new Set([
   "model_editable_context",
@@ -99,11 +83,12 @@ function activeBranchNodes(
  */
 export function activeBranchTranscript(
   detail: ConversationDetail,
-  options: { maxMessages?: number } = {},
+  options: { maxMessages?: number; timeZone?: string } = {},
 ): ActiveTranscript {
   const conversationId =
     detail.conversation_id ?? detail.id ?? "unknown";
   const maxMessages = options.maxMessages ?? 100;
+  const timeZone = options.timeZone ?? "UTC";
 
   const messages: TranscriptMessage[] = [];
   for (const node of activeBranchNodes(detail)) {
@@ -115,7 +100,10 @@ export function activeBranchTranscript(
       role,
       content: extracted.text,
       content_type: node.message?.content?.content_type ?? null,
-      created_at: isoFromTimestamp(node.message?.create_time ?? null),
+      created_at: formatTimestamp(
+        node.message?.create_time ?? null,
+        timeZone,
+      ),
       message_id: node.message?.id ?? node.id ?? null,
     };
     if (extracted.richContent) {
@@ -146,8 +134,9 @@ export function activeBranchTranscript(
   return {
     conversation_id: conversationId,
     title: detail.title?.trim() || "(untitled)",
-    updated_at: isoFromTimestamp(detail.update_time ?? null),
-    created_at: isoFromTimestamp(detail.create_time ?? null),
+    time_zone: timeZone,
+    updated_at: formatTimestamp(detail.update_time ?? null, timeZone),
+    created_at: formatTimestamp(detail.create_time ?? null, timeZone),
     branch: "active",
     experience: inferConversationExperience(detail),
     completion_status: inferConversationCompletionStatus(detail),
