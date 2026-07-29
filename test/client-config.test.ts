@@ -16,6 +16,7 @@ import {
   configureClients,
   removeClientConfigurations,
 } from "../src/client-config.js";
+import { PACKAGE_VERSION } from "../src/version.js";
 
 test("updates JSON client config without replacing unrelated settings", async (t) => {
   const home = await mkdtemp(join(tmpdir(), "read-my-chatgpt-client-"));
@@ -224,6 +225,98 @@ test("writes each supported client's current remote HTTP shape", async (t) => {
   const grok = await readFile(join(home, ".grok", "config.toml"), "utf8");
   assert.match(grok, /\[mcp_servers\.read-my-chatgpt\]/);
   assert.match(grok, /\[mcp_servers\.read-my-chatgpt\.headers\]/);
+});
+
+test("writes each supported client's pinned stdio connector shape", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "read-my-chatgpt-stdio-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const env = { XDG_CONFIG_HOME: join(home, ".config") };
+  const launcher = {
+    command: "npx",
+    args: [
+      "-y",
+      `read-my-chatgpt@${PACKAGE_VERSION}`,
+      "connect",
+    ],
+  };
+
+  const results = await configureClients({
+    homeDirectory: home,
+    launcher,
+    clients: "all",
+    env,
+  });
+  assert.equal(results.length, 7);
+  assert.ok(results.every((result) => result.configured));
+
+  const claude = JSON.parse(
+    await readFile(join(home, ".claude.json"), "utf8"),
+  );
+  assert.deepEqual(
+    claude.mcpServers["read-my-chatgpt"],
+    launcher,
+  );
+
+  const cursor = JSON.parse(
+    await readFile(join(home, ".cursor", "mcp.json"), "utf8"),
+  );
+  assert.deepEqual(
+    cursor.mcpServers["read-my-chatgpt"],
+    launcher,
+  );
+
+  const gemini = JSON.parse(
+    await readFile(join(home, ".gemini", "settings.json"), "utf8"),
+  );
+  assert.deepEqual(gemini.mcpServers["read-my-chatgpt"], {
+    ...launcher,
+    timeout: 60_000,
+  });
+
+  const opencode = JSON.parse(
+    await readFile(
+      join(home, ".config", "opencode", "opencode.json"),
+      "utf8",
+    ),
+  );
+  assert.deepEqual(opencode.mcp["read-my-chatgpt"], {
+    type: "local",
+    command: ["npx", ...launcher.args],
+    enabled: true,
+    timeout: 60_000,
+  });
+
+  const pi = JSON.parse(
+    await readFile(join(home, ".pi", "agent", "mcp.json"), "utf8"),
+  );
+  assert.deepEqual(pi.mcpServers["read-my-chatgpt"], {
+    ...launcher,
+    directTools: true,
+  });
+
+  const codex = await readFile(
+    join(home, ".codex", "config.toml"),
+    "utf8",
+  );
+  assert.match(codex, /command = "npx"/);
+  assert.ok(
+    codex.includes(
+      `args = ["-y", "read-my-chatgpt@${PACKAGE_VERSION}", "connect"]`,
+    ),
+  );
+  assert.doesNotMatch(codex, /Authorization/);
+
+  const grok = await readFile(
+    join(home, ".grok", "config.toml"),
+    "utf8",
+  );
+  assert.match(grok, /command = "npx"/);
+  assert.ok(
+    grok.includes(
+      `args = ["-y", "read-my-chatgpt@${PACKAGE_VERSION}", "connect"]`,
+    ),
+  );
+  assert.doesNotMatch(grok, /headers|Authorization/);
 });
 
 test("updates a symlink target without replacing the symlink", async (t) => {

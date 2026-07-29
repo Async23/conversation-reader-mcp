@@ -19,9 +19,13 @@ Only the latest published version receives security fixes.
 
 ## Local trust boundary
 
-The HTTP MCP endpoint is intentionally limited to loopback and protected with a
-generated Bearer token. Reports that require binding it to a LAN or public
-interface are outside the supported security model.
+AI clients start a pinned stdio connector command. The connector starts the
+shared HTTP daemon only for a tool call; the daemon is limited to loopback,
+protected with a generated Bearer token, and exits after the configured idle
+period. The ChatGPT access token and daemon Bearer token remain in the private
+local service config and are not copied into AI client configs. Reports that
+require binding the daemon to a LAN or public interface are outside the
+supported security model.
 
 Conversation assets are resolved only after their opaque id is found on the
 active visible branch of the requested conversation. Downloads have a byte

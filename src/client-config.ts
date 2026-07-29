@@ -33,6 +33,22 @@ export type ClientConfigurationResult = {
   reason?: string;
 };
 
+export type ClientLauncher = {
+  command: string;
+  args: readonly string[];
+};
+
+type ClientConnection =
+  | {
+      kind: "http";
+      endpoint: string;
+      bearerToken: string;
+    }
+  | {
+      kind: "stdio";
+      launcher: ClientLauncher;
+    };
+
 type ClientSpec = {
   name: ClientName;
   path: string;
@@ -112,14 +128,36 @@ export function clientSpecs(
   ];
 }
 
-export async function configureClients(options: {
-  homeDirectory: string;
-  endpoint: string;
-  bearerToken: string;
-  clients: readonly ClientName[] | "auto" | "all";
-  env?: NodeJS.ProcessEnv;
-}): Promise<ClientConfigurationResult[]> {
+export async function configureClients(
+  options: {
+    homeDirectory: string;
+    clients: readonly ClientName[] | "auto" | "all";
+    env?: NodeJS.ProcessEnv;
+  } & (
+    | {
+        endpoint: string;
+        bearerToken: string;
+        launcher?: never;
+      }
+    | {
+        launcher: ClientLauncher;
+        endpoint?: never;
+        bearerToken?: never;
+      }
+  ),
+): Promise<ClientConfigurationResult[]> {
   const specs = clientSpecs(options.homeDirectory, options.env);
+  const connection: ClientConnection =
+    options.launcher === undefined
+      ? {
+          kind: "http",
+          endpoint: options.endpoint,
+          bearerToken: options.bearerToken,
+        }
+      : {
+          kind: "stdio",
+          launcher: options.launcher,
+        };
   const selected =
     options.clients === "all"
       ? specs
@@ -132,8 +170,7 @@ export async function configureClients(options: {
     try {
       const backupPath = await configureClient(
         spec,
-        options.endpoint,
-        options.bearerToken,
+        connection,
       );
       results.push({
         client: spec.name,
@@ -215,8 +252,7 @@ async function detectedSpecs(
 
 async function configureClient(
   spec: ClientSpec,
-  endpoint: string,
-  bearerToken: string,
+  connection: ClientConnection,
 ): Promise<string | undefined> {
   const targetPath = await resolveConfigPath(spec.path);
   const existing = await readOptional(targetPath);
@@ -229,15 +265,13 @@ async function configureClient(
     contents = updateJsonConfig(
       spec,
       existing ?? "{}\n",
-      endpoint,
-      bearerToken,
+      connection,
     );
   } else {
     contents = updateTomlConfig(
       existing ?? "",
       spec.format,
-      endpoint,
-      bearerToken,
+      connection,
     );
   }
 
@@ -248,8 +282,7 @@ async function configureClient(
 function updateJsonConfig(
   spec: ClientSpec,
   existing: string,
-  endpoint: string,
-  bearerToken: string,
+  connection: ClientConnection,
 ): string {
   let parsed: unknown;
   try {
@@ -274,8 +307,7 @@ function updateJsonConfig(
   }
   servers[MCP_SERVER_NAME] = jsonServerValue(
     spec.name,
-    endpoint,
-    bearerToken,
+    connection,
   );
   parsed[rootKey] = servers;
   return `${JSON.stringify(parsed, null, 2)}\n`;
@@ -312,18 +344,42 @@ function removeJsonServer(spec: ClientSpec, existing: string): string {
 
 function jsonServerValue(
   client: ClientName,
-  endpoint: string,
-  bearerToken: string,
+  connection: ClientConnection,
 ): Record<string, unknown> {
+  if (connection.kind === "stdio") {
+    const launcher = {
+      command: connection.launcher.command,
+      args: [...connection.launcher.args],
+    };
+    if (client === "gemini") {
+      return { ...launcher, timeout: 60_000 };
+    }
+    if (client === "opencode") {
+      return {
+        type: "local",
+        command: [
+          connection.launcher.command,
+          ...connection.launcher.args,
+        ],
+        enabled: true,
+        timeout: 60_000,
+      };
+    }
+    if (client === "pi") {
+      return { ...launcher, directTools: true };
+    }
+    return launcher;
+  }
+
   const headers = {
-    Authorization: `Bearer ${bearerToken}`,
+    Authorization: `Bearer ${connection.bearerToken}`,
   };
   if (client === "claude") {
-    return { type: "http", url: endpoint, headers };
+    return { type: "http", url: connection.endpoint, headers };
   }
   if (client === "gemini") {
     return {
-      httpUrl: endpoint,
+      httpUrl: connection.endpoint,
       headers,
       timeout: 60_000,
     };
@@ -331,7 +387,7 @@ function jsonServerValue(
   if (client === "opencode") {
     return {
       type: "remote",
-      url: endpoint,
+      url: connection.endpoint,
       headers,
       enabled: true,
       timeout: 60_000,
@@ -340,19 +396,18 @@ function jsonServerValue(
   }
   if (client === "pi") {
     return {
-      url: endpoint,
+      url: connection.endpoint,
       headers,
       directTools: true,
     };
   }
-  return { url: endpoint, headers };
+  return { url: connection.endpoint, headers };
 }
 
 function updateTomlConfig(
   existing: string,
   format: "codex-toml" | "grok-toml",
-  endpoint: string,
-  bearerToken: string,
+  connection: ClientConnection,
 ): string {
   let result = existing;
   for (const name of [MCP_SERVER_NAME, ...LEGACY_SERVER_NAMES]) {
@@ -360,8 +415,21 @@ function updateTomlConfig(
   }
   result = result.trimEnd();
   const prefix = result ? `${result}\n\n` : "";
-  const escapedEndpoint = tomlString(endpoint);
-  const escapedAuthorization = tomlString(`Bearer ${bearerToken}`);
+  if (connection.kind === "stdio") {
+    const command = tomlString(connection.launcher.command);
+    const args = connection.launcher.args.map(tomlString).join(", ");
+    return (
+      `${prefix}[mcp_servers.${MCP_SERVER_NAME}]\n` +
+      `command = ${command}\n` +
+      `args = [${args}]\n` +
+      (format === "grok-toml" ? "enabled = true\n" : "")
+    );
+  }
+
+  const escapedEndpoint = tomlString(connection.endpoint);
+  const escapedAuthorization = tomlString(
+    `Bearer ${connection.bearerToken}`,
+  );
 
   if (format === "codex-toml") {
     return (

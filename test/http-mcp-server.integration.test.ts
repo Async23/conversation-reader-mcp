@@ -21,6 +21,36 @@ function createClient(url: URL, name: string) {
   return { client, transport };
 }
 
+test("an on-demand daemon exits if its initiating tool never arrives", async () => {
+  const config = loadConfig({
+    READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
+    READ_MY_CHATGPT_TRANSPORT: "direct",
+  });
+  const runtime = await ReadMyChatGptRuntime.create(config);
+  const running = await startHttpMcpServer(runtime, {
+    host: "127.0.0.1",
+    port: 0,
+    bearerToken,
+    toolIdleMs: 100,
+  });
+
+  let timeout: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      running.idle,
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("daemon did not idle out")),
+          500,
+        );
+      }),
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+    await running.close();
+  }
+});
+
 test("one HTTP runtime serves independent authenticated MCP sessions", async () => {
   let backendRequests = 0;
   const backend = http.createServer((request, response) => {
@@ -62,6 +92,7 @@ test("one HTTP runtime serves independent authenticated MCP sessions", async () 
     port: 0,
     bearerToken,
     sessionIdleMs: 500,
+    toolIdleMs: 10_000,
   });
   const first = createClient(running.url, "first-client");
   const second = createClient(running.url, "second-client");
@@ -176,6 +207,20 @@ test("one HTTP runtime serves independent authenticated MCP sessions", async () 
     await abandoned.client.close();
     await new Promise((resolve) => setTimeout(resolve, 900));
     assert.equal(running.sessionCount, 0);
+
+    const shutdownUrl = new URL("/shutdown", running.url);
+    const unauthorizedShutdown = await fetch(shutdownUrl, {
+      method: "POST",
+    });
+    assert.equal(unauthorizedShutdown.status, 401);
+    const shutdown = await fetch(shutdownUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${bearerToken}`,
+      },
+    });
+    assert.equal(shutdown.status, 202);
+    await running.idle;
   } finally {
     await Promise.allSettled([
       first.client.close(),

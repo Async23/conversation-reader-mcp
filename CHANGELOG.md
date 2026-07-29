@@ -6,6 +6,14 @@
 
 ### Added
 
+- Add a lightweight stdio `connect` command that advertises tools without
+  starting the browser runtime and lazily connects tool calls to one shared
+  local daemon.
+- Add a 10-minute tool-activity idle timeout for the shared daemon. Tool lists
+  and heartbeats do not refresh it, in-flight calls finish before countdown,
+  and connectors transparently restart the daemon on the next call.
+- Add command-based client configuration for Codex, Claude Code, Cursor,
+  Gemini CLI, Grok CLI, OpenCode, and Pi.
 - Add `READ_MY_CHATGPT_OUTPUT_TIMEZONE` for RFC 3339 conversation timestamps
   in a validated IANA timezone, including daylight-saving offsets.
 - Add formatted `created_at` / `updated_at` fields and explicit `time_zone`
@@ -13,6 +21,13 @@
   timestamp fields for compatibility.
 - Advertise the configured timestamp semantics through MCP server instructions
   and tool descriptions.
+
+### Changed
+
+- Replace `setup` with one-time `init`; keep `setup` as a deprecated alias.
+- Stop installing launchd or systemd user services. `init` removes an existing
+  persistent service when upgrading and keeps only local secrets, Obscura, and
+  client configuration.
 
 ## [0.3.0] - 2026-07-23
 

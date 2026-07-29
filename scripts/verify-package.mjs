@@ -37,7 +37,7 @@ function run(command, args, options = {}) {
   return result;
 }
 
-async function runLifecycle(executable, temporaryRoot) {
+async function runLifecycle(executable, temporaryRoot, packageVersion) {
   if (process.platform !== "darwin" && process.platform !== "linux") {
     console.error(
       `verify-package.mjs: skipping service lifecycle on ${process.platform}`,
@@ -61,10 +61,10 @@ async function runLifecycle(executable, temporaryRoot) {
     `#!/bin/sh
 printf '%s\n' "$*" >> "$FAKE_SERVICE_LOG"
 if [ "$1" = "print" ]; then
-  printf 'state = running\n'
+  exit 1
 fi
 if [ "$1" = "--user" ] && [ "$2" = "is-active" ]; then
-  printf 'active\n'
+  exit 1
 fi
 exit 0
 `,
@@ -213,7 +213,7 @@ process.on("SIGTERM", () => {
 
     const invalidPort = spawnSync(
       executable,
-      ["setup", "--yes", "--port", "0"],
+      ["init", "--yes", "--port", "0"],
       {
         cwd: lifecycleRoot,
         encoding: "utf8",
@@ -225,10 +225,10 @@ process.on("SIGTERM", () => {
     assert.equal(invalidPort.status, 1);
     assert.match(invalidPort.stderr, /--port must be an integer/);
 
-    const setup = run(
+    const init = run(
       executable,
       [
-        "setup",
+        "init",
         "--yes",
         "--no-configure",
         "--port",
@@ -236,9 +236,9 @@ process.on("SIGTERM", () => {
       ],
       { cwd: lifecycleRoot, env },
     );
-    assert.match(setup.stdout, /read-my-chatgpt is running/);
+    assert.match(init.stdout, /read-my-chatgpt is initialized/);
     assert.match(
-      setup.stderr,
+      init.stderr,
       /Migrated the previous conversation-reader-mcp installation/,
     );
 
@@ -259,6 +259,10 @@ process.on("SIGTERM", () => {
       "legacy-mcp-token",
     );
     assert.equal(serviceConfig.READ_MY_CHATGPT_MCP_PORT, port);
+    assert.equal(
+      serviceConfig.READ_MY_CHATGPT_DAEMON_IDLE_MS,
+      "600000",
+    );
     assert.equal(
       serviceConfig.READ_MY_CHATGPT_OBSCURA_BIN,
       join(
@@ -305,7 +309,7 @@ process.on("SIGTERM", () => {
             "user",
             "read-my-chatgpt.service",
           );
-    assert.equal(existsSync(serviceDefinition), true);
+    assert.equal(existsSync(serviceDefinition), false);
 
     const configure = run(executable, ["configure", "cursor"], {
       cwd: lifecycleRoot,
@@ -313,9 +317,19 @@ process.on("SIGTERM", () => {
     });
     assert.match(configure.stdout, /cursor/);
     const cursorConfigPath = join(home, ".cursor", "mcp.json");
-    assert.match(
+    const cursorConfig = JSON.parse(
       readFileSync(cursorConfigPath, "utf8"),
-      /read-my-chatgpt/,
+    );
+    assert.deepEqual(
+      cursorConfig.mcpServers["read-my-chatgpt"],
+      {
+        command: "npx",
+        args: [
+          "-y",
+          `read-my-chatgpt@${packageVersion}`,
+          "connect",
+        ],
+      },
     );
 
     const doctor = run(executable, ["doctor", "--json"], {
@@ -343,9 +357,11 @@ process.on("SIGTERM", () => {
     );
 
     const managerCommands = readFileSync(serviceLog, "utf8");
-    assert.match(
+    assert.doesNotMatch(
       managerCommands,
-      process.platform === "darwin" ? /bootstrap/ : /enable --now/,
+      process.platform === "darwin"
+        ? /\bbootstrap\b|\bkickstart\b/
+        : /\benable --now\b/,
     );
     assert.match(
       managerCommands,
@@ -426,6 +442,8 @@ try {
   assert.match(listing, /package\/licenses\/OBSCURA-APACHE-2\.0\.txt/);
   assert.match(listing, /package\/dist\/install-migration\.js/);
   assert.match(listing, /package\/dist\/obscura-installer\.js/);
+  assert.match(listing, /package\/dist\/connector\.js/);
+  assert.match(listing, /package\/dist\/daemon-client\.js/);
   assert.doesNotMatch(listing, /package\/src\//);
   assert.doesNotMatch(listing, /package\/\.env$/m);
   assert.notEqual(
@@ -472,7 +490,7 @@ try {
     "read-my-chatgpt",
   );
   const help = run(executable, ["--help"], { cwd: temporaryRoot });
-  assert.match(help.stdout, /read-my-chatgpt setup/);
+  assert.match(help.stdout, /read-my-chatgpt init/);
   const version = run(executable, ["--version"], {
     cwd: temporaryRoot,
   });
@@ -496,7 +514,11 @@ try {
     /\[read-my-chatgpt\] ready on stdio/,
   );
 
-  await runLifecycle(executable, temporaryRoot);
+  await runLifecycle(
+    executable,
+    temporaryRoot,
+    installedPackage.version,
+  );
 
   console.error("verify-package.mjs: ok");
 } finally {

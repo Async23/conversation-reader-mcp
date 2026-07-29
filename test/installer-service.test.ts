@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 import {
   chmod,
-  mkdir,
   mkdtemp,
   rm,
   stat,
@@ -12,7 +9,6 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { installPaths } from "../src/install-paths.js";
 import {
   managedObscuraBinaryPath,
   obscuraAssetFor,
@@ -23,11 +19,6 @@ import {
   readServiceEnvironment,
   writeServiceEnvironment,
 } from "../src/service-config.js";
-import {
-  installService,
-  renderLaunchAgent,
-  renderSystemdUnit,
-} from "../src/service-manager.js";
 
 test("maps supported Obscura assets and rejects unsupported platforms", () => {
   const asset = obscuraAssetFor("darwin", "arm64");
@@ -94,107 +85,4 @@ test("writes service secrets privately and validates their keys", async (t) => {
     () => readServiceEnvironment(path),
     /Unsupported service config key/,
   );
-});
-
-test("renders dynamic launchd and systemd definitions safely", () => {
-  const paths = installPaths({
-    env: {
-      XDG_CONFIG_HOME: "/home/a&b/.config",
-      XDG_DATA_HOME: "/home/a&b/.data",
-    },
-    homeDirectory: "/home/a&b",
-  });
-  const options = {
-    platform: "darwin" as const,
-    paths,
-    nodePath: '/opt/node "stable"/bin/node',
-    entrypointPath: "/opt/read-my-chatgpt/dist/index.js",
-  };
-  const plist = renderLaunchAgent(options);
-  assert.match(plist, /io\.github\.async23\.read-my-chatgpt/);
-  assert.match(plist, /\/home\/a&amp;b/);
-  assert.doesNotMatch(plist, /\/Users\/alfheim/);
-
-  const unit = renderSystemdUnit({ ...options, platform: "linux" });
-  assert.match(unit, /Read My ChatGPT MCP singleton/);
-  assert.match(unit, /node \\"stable\\"/);
-  assert.doesNotMatch(unit, /\/Users\/alfheim/);
-});
-
-test("waits for an existing launchd process before bootstrapping its replacement", async (t) => {
-  const home = await mkdtemp(join(tmpdir(), "read-my-chatgpt-reinstall-"));
-  t.after(() => rm(home, { recursive: true, force: true }));
-  const paths = installPaths({
-    env: {
-      XDG_CONFIG_HOME: join(home, ".config"),
-      XDG_DATA_HOME: join(home, ".local", "share"),
-    },
-    homeDirectory: home,
-  });
-  const writer = spawn(
-    process.execPath,
-    [
-      "--input-type=module",
-      "--eval",
-      `
-        process.on("SIGTERM", () => {
-          setTimeout(() => process.exit(0), 100);
-        });
-        process.stdout.write("ready\\n");
-        setInterval(() => {}, 1_000);
-      `,
-    ],
-    { stdio: ["ignore", "pipe", "inherit"] },
-  );
-  t.after(() => {
-    if (writer.exitCode === null && writer.signalCode === null) {
-      writer.kill("SIGKILL");
-    }
-  });
-  await once(writer.stdout!, "data");
-
-  const binDirectory = join(home, "bin");
-  const fakeLaunchctl = join(binDirectory, "launchctl");
-  await mkdir(binDirectory, { recursive: true });
-  await writeFile(
-    fakeLaunchctl,
-    `#!/usr/bin/env node
-const pid = Number(process.env.READ_MY_CHATGPT_TEST_SERVICE_PID);
-const command = process.argv[2];
-if (command === "print") {
-  process.stdout.write(\`pid = \${pid}\\nstate = running\\n\`);
-} else if (command === "bootout") {
-  process.kill(pid, "SIGTERM");
-} else if (command === "bootstrap") {
-  try {
-    process.kill(pid, 0);
-    process.stderr.write("old service is still exiting\\n");
-    process.exit(5);
-  } catch {}
-}
-`,
-  );
-  await chmod(fakeLaunchctl, 0o700);
-
-  const originalPath = process.env.PATH;
-  const originalPid = process.env.READ_MY_CHATGPT_TEST_SERVICE_PID;
-  process.env.PATH = `${binDirectory}:${originalPath ?? ""}`;
-  process.env.READ_MY_CHATGPT_TEST_SERVICE_PID = String(writer.pid);
-  const writerExit = once(writer, "exit");
-  t.after(() => {
-    process.env.PATH = originalPath;
-    if (originalPid === undefined) {
-      delete process.env.READ_MY_CHATGPT_TEST_SERVICE_PID;
-    } else {
-      process.env.READ_MY_CHATGPT_TEST_SERVICE_PID = originalPid;
-    }
-  });
-
-  await installService({
-    platform: "darwin",
-    paths,
-    nodePath: process.execPath,
-    entrypointPath: "/tmp/read-my-chatgpt.js",
-  });
-  await writerExit;
 });

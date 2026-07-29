@@ -1,23 +1,18 @@
 import { randomBytes } from "node:crypto";
 import {
-  access,
   chmod,
   mkdir,
-  readFile,
-  realpath,
   rm,
   stat,
 } from "node:fs/promises";
-import { constants as fsConstants } from "node:fs";
 import { homedir } from "node:os";
-import { delimiter, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   CLIENT_NAMES,
   configureClients,
   removeClientConfigurations,
   type ClientName,
 } from "./client-config.js";
+import { startConnectorMcpServer } from "./connector.js";
 import { ConfigError, loadConfig } from "./config.js";
 import { startHttpMcpServer } from "./http-server.js";
 import { migrateLegacyInstallation } from "./install-migration.js";
@@ -39,9 +34,7 @@ import {
 } from "./service-config.js";
 import {
   getServiceStatus,
-  installService,
   uninstallService,
-  type ServiceStatus,
 } from "./service-manager.js";
 import {
   type RunningMcpServer,
@@ -53,7 +46,7 @@ export const CLI_VERSION = PACKAGE_VERSION;
 const DEFAULT_PORT = 47_831;
 const PRODUCT = SERVICE_NAME;
 
-type SetupOptions = {
+type InitOptions = {
   port: number;
   configure: boolean;
   yes: boolean;
@@ -86,9 +79,26 @@ export async function runCli(args: readonly string[]): Promise<void> {
     await runMcpService(configPath);
     return;
   }
-  if (command === "setup") {
-    const options = parseSetupOptions(args.slice(1));
-    await setup(options);
+  if (command === "daemon") {
+    const configPath = optionValue(args.slice(1), "--config");
+    assertOnlyOptions(args.slice(1), ["--config"]);
+    await runMcpDaemon(configPath);
+    return;
+  }
+  if (command === "connect") {
+    const configPath = optionValue(args.slice(1), "--config");
+    assertOnlyOptions(args.slice(1), ["--config"]);
+    await runConnector(configPath);
+    return;
+  }
+  if (command === "init" || command === "setup") {
+    const options = parseInitOptions(args.slice(1));
+    if (command === "setup") {
+      console.error(
+        `[${PRODUCT}] "setup" is deprecated; use "${PRODUCT} init".`,
+      );
+    }
+    await init(options);
     return;
   }
   if (command === "configure") {
@@ -156,17 +166,77 @@ export async function runMcpService(configPath?: string): Promise<void> {
   process.once("SIGTERM", () => void shutdown(143));
 }
 
-async function setup(options: SetupOptions): Promise<void> {
-  assertServicePlatform(process.platform);
-  const entrypointPath = fileURLToPath(
-    new URL("./index.js", import.meta.url),
+async function runConnector(configPath?: string): Promise<void> {
+  const resolvedConfigPath =
+    configPath ?? installPaths().serviceConfigPath;
+  applyServiceEnvironment(
+    await readServiceEnvironment(resolvedConfigPath),
   );
-  await assertCompiledEntrypoint(entrypointPath);
-  if (entrypointPath.includes("/_npx/")) {
-    throw new Error(
-      `Refusing to install a service from an ephemeral npx cache. Run "npm install -g ${PRODUCT}" first.`,
+
+  let config;
+  try {
+    config = loadConfig();
+  } catch (error) {
+    if (error instanceof ConfigError) throw error;
+    throw new ConfigError(
+      error instanceof Error ? error.message : String(error),
     );
   }
+
+  const running = await startConnectorMcpServer(
+    config,
+    resolvedConfigPath,
+  );
+  let shuttingDown = false;
+  const shutdown = async (exitCode: number) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await running.close();
+    process.exit(exitCode);
+  };
+  process.once("SIGINT", () => void shutdown(130));
+  process.once("SIGTERM", () => void shutdown(143));
+}
+
+async function runMcpDaemon(configPath?: string): Promise<void> {
+  const resolvedConfigPath =
+    configPath ?? installPaths().serviceConfigPath;
+  applyServiceEnvironment(
+    await readServiceEnvironment(resolvedConfigPath),
+  );
+
+  const config = loadConfig();
+  if (config.mcpTransport !== "http") {
+    throw new ConfigError(
+      "The on-demand daemon requires READ_MY_CHATGPT_MCP_TRANSPORT=http.",
+    );
+  }
+
+  const runtime = await ReadMyChatGptRuntime.create(config);
+  const running = await startHttpMcpServer(runtime, {
+    host: config.mcpHost,
+    port: config.mcpPort,
+    bearerToken: config.mcpBearerToken,
+    sessionIdleMs: config.mcpSessionIdleMs,
+    toolIdleMs: config.daemonIdleMs,
+  });
+
+  let shuttingDown = false;
+  const shutdown = async (exitCode: number) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    await running.close();
+    process.exit(exitCode);
+  };
+  process.once("SIGINT", () => void shutdown(130));
+  process.once("SIGTERM", () => void shutdown(143));
+
+  await running.idle;
+  await shutdown(0);
+}
+
+async function init(options: InitOptions): Promise<void> {
+  assertServicePlatform(process.platform);
   if (!options.yes) {
     console.error(
       "This tool uses non-public ChatGPT Web endpoints. Automated extraction may be restricted by the service terms.",
@@ -175,9 +245,19 @@ async function setup(options: SetupOptions): Promise<void> {
       "Continue only if you have confirmed your use is permitted. Continue? [y/N] ",
     );
     if (!/^y(?:es)?$/i.test(answer.trim())) {
-      throw new Error("Setup cancelled.");
+      throw new Error("Initialization cancelled.");
     }
   }
+  const paths = installPaths();
+  await stopOnDemandDaemon(
+    await readOptionalServiceEnvironment(
+      paths.serviceConfigPath,
+    ),
+  );
+  await uninstallService({
+    platform: process.platform,
+    paths,
+  });
   const migration = await migrateLegacyInstallation({
     platform: process.platform,
   });
@@ -191,7 +271,6 @@ async function setup(options: SetupOptions): Promise<void> {
       );
     }
   }
-  const paths = installPaths();
   const existing = await readOptionalServiceEnvironment(
     paths.serviceConfigPath,
   );
@@ -233,6 +312,10 @@ async function setup(options: SetupOptions): Promise<void> {
     READ_MY_CHATGPT_MCP_HOST: "127.0.0.1",
     READ_MY_CHATGPT_MCP_PORT: String(options.port),
     READ_MY_CHATGPT_MCP_BEARER_TOKEN: bearerToken,
+    READ_MY_CHATGPT_DAEMON_IDLE_MS:
+      process.env.READ_MY_CHATGPT_DAEMON_IDLE_MS?.trim() ||
+      existing?.READ_MY_CHATGPT_DAEMON_IDLE_MS ||
+      "600000",
   };
   const maxAssetBytes =
     process.env.READ_MY_CHATGPT_MAX_ASSET_BYTES?.trim() ||
@@ -246,24 +329,14 @@ async function setup(options: SetupOptions): Promise<void> {
   if (outputTimezone) {
     environment.READ_MY_CHATGPT_OUTPUT_TIMEZONE = outputTimezone;
   }
+  const initializedConfig = loadConfig(environment);
   await writeServiceEnvironment(paths.serviceConfigPath, environment);
-
-  await installService({
-    platform: process.platform,
-    paths,
-    nodePath: await stableNodePath(),
-    entrypointPath,
-  });
-
-  const endpoint = endpointFor(environment);
-  await waitForHealth(endpoint);
 
   let configured = 0;
   if (options.configure) {
     const results = await configureClients({
       homeDirectory: homedir(),
-      endpoint,
-      bearerToken,
+      launcher: connectorLauncher(),
       clients: "auto",
     });
     for (const result of results) {
@@ -278,13 +351,16 @@ async function setup(options: SetupOptions): Promise<void> {
     }
   }
 
-  console.log(`\n${PRODUCT} is running at ${endpoint}`);
+  console.log(`\n${PRODUCT} is initialized.`);
   console.log(
     configured > 0
       ? `Configured ${configured} detected AI client(s). Restart them once.`
-      : `No existing client config was detected. Run: ${PRODUCT} configure all`,
+      : `No existing client config was detected. Run: ${npxCommand("configure all")}`,
   );
-  console.log(`Check anytime with: ${PRODUCT} doctor`);
+  console.log(
+    `The shared daemon starts on the first tool call and stops after ${formatIdleDuration(initializedConfig.daemonIdleMs)} without a tool call.`,
+  );
+  console.log(`Check anytime with: ${npxCommand("doctor")}`);
 }
 
 async function configure(args: readonly string[]): Promise<void> {
@@ -294,14 +370,7 @@ async function configure(args: readonly string[]): Promise<void> {
   );
   if (!environment) {
     throw new Error(
-      `Service config not found. Run ${PRODUCT} setup first.`,
-    );
-  }
-  const bearerToken =
-    environment.READ_MY_CHATGPT_MCP_BEARER_TOKEN?.trim();
-  if (!bearerToken) {
-    throw new Error(
-      `Service has no MCP Bearer token. Re-run ${PRODUCT} setup.`,
+      `Service config not found. Run ${npxCommand("init")} first.`,
     );
   }
 
@@ -324,13 +393,12 @@ async function configure(args: readonly string[]): Promise<void> {
 
   const results = await configureClients({
     homeDirectory: homedir(),
-    endpoint: endpointFor(environment),
-    bearerToken,
+    launcher: connectorLauncher(),
     clients: selection,
   });
   if (results.length === 0) {
     console.log(
-      `No existing client config detected. Use "${PRODUCT} configure all" or name clients explicitly.`,
+      `No existing client config detected. Use "${npxCommand("configure all")}" or name clients explicitly.`,
     );
     return;
   }
@@ -384,22 +452,25 @@ async function doctor(json: boolean): Promise<boolean> {
     });
   }
 
-  let serviceStatus: ServiceStatus | undefined;
   try {
-    serviceStatus = await getServiceStatus({
+    const serviceStatus = await getServiceStatus({
       platform: process.platform,
       paths,
     });
+    const absent =
+      !serviceStatus.installed && !serviceStatus.running;
     checks.push({
-      name: "background-service",
-      ok: serviceStatus.installed && serviceStatus.running,
-      detail: `${serviceStatus.manager}: ${
-        serviceStatus.installed ? "installed" : "not installed"
-      }, ${serviceStatus.running ? "running" : "not running"}`,
+      name: "persistent-service",
+      ok: absent,
+      detail: absent
+        ? "not installed (on-demand mode)"
+        : `${serviceStatus.manager}: ${
+            serviceStatus.installed ? "installed" : "not installed"
+          }, ${serviceStatus.running ? "running" : "not running"}`,
     });
   } catch (error) {
     checks.push({
-      name: "background-service",
+      name: "persistent-service",
       ok: false,
       detail: errorMessage(error),
     });
@@ -435,15 +506,17 @@ async function doctor(json: boolean): Promise<boolean> {
     try {
       await fetchHealth(endpoint);
       checks.push({
-        name: "http-endpoint",
+        name: "on-demand-daemon",
         ok: true,
-        detail: endpoint,
+        detail: `running at ${endpoint}`,
       });
     } catch (error) {
       checks.push({
-        name: "http-endpoint",
-        ok: false,
-        detail: `${endpoint}: ${errorMessage(error)}`,
+        name: "on-demand-daemon",
+        ok: hasNodeErrorCode(error, "ECONNREFUSED"),
+        detail: hasNodeErrorCode(error, "ECONNREFUSED")
+          ? "stopped (starts on first tool call)"
+          : `${endpoint}: ${errorMessage(error)}`,
       });
     }
   }
@@ -457,8 +530,7 @@ async function doctor(json: boolean): Promise<boolean> {
           checks,
           paths: {
             config: paths.serviceConfigPath,
-            stdoutLog: paths.stdoutLogPath,
-            stderrLog: paths.stderrLogPath,
+            data: paths.dataDirectory,
           },
         },
         null,
@@ -477,6 +549,11 @@ async function doctor(json: boolean): Promise<boolean> {
 async function uninstall(purge: boolean, yes: boolean): Promise<void> {
   const paths = installPaths();
   const legacyPaths = legacyInstallPaths();
+  await stopOnDemandDaemon(
+    await readOptionalServiceEnvironment(
+      paths.serviceConfigPath,
+    ),
+  );
   await uninstallService({
     platform: process.platform,
     paths,
@@ -485,7 +562,7 @@ async function uninstall(purge: boolean, yes: boolean): Promise<void> {
     platform: process.platform,
     paths: legacyPaths,
   });
-  console.log("Background service removed.");
+  console.log("Persistent service (if any) removed.");
   const clientResults = await removeClientConfigurations({
     homeDirectory: homedir(),
   });
@@ -499,7 +576,7 @@ async function uninstall(purge: boolean, yes: boolean): Promise<void> {
 
   if (!purge) {
     console.log(
-      `Configuration and local data were kept. Remove them with: ${PRODUCT} uninstall --purge`,
+      `Configuration and local data were kept. Remove them with: ${npxCommand("uninstall --purge")}`,
     );
     return;
   }
@@ -529,7 +606,7 @@ async function uninstall(purge: boolean, yes: boolean): Promise<void> {
   console.log("Local configuration and data removed.");
 }
 
-function parseSetupOptions(args: readonly string[]): SetupOptions {
+function parseInitOptions(args: readonly string[]): InitOptions {
   assertOnlyOptions(args, ["--port", "--no-configure", "--yes"]);
   const value = optionValue(args, "--port");
   const port = value === undefined ? DEFAULT_PORT : Number(value);
@@ -575,21 +652,62 @@ function endpointFor(environment: ServiceEnvironment): string {
   return `http://${formatHost(host)}:${port}/mcp`;
 }
 
-async function waitForHealth(endpoint: string): Promise<void> {
-  const deadline = Date.now() + 20_000;
-  let lastError: unknown;
+async function stopOnDemandDaemon(
+  environment: ServiceEnvironment | undefined,
+): Promise<void> {
+  if (
+    !environment ||
+    environment.READ_MY_CHATGPT_MCP_TRANSPORT !== "http"
+  ) {
+    return;
+  }
+
+  const endpoint = endpointFor(environment);
+  const shutdownUrl = new URL("/shutdown", endpoint);
+  const bearerToken =
+    environment.READ_MY_CHATGPT_MCP_BEARER_TOKEN?.trim();
+  let response: Response;
+  try {
+    response = await fetch(shutdownUrl, {
+      method: "POST",
+      headers: bearerToken
+        ? { Authorization: `Bearer ${bearerToken}` }
+        : undefined,
+      signal: AbortSignal.timeout(2_000),
+    });
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ECONNREFUSED")) return;
+    throw error;
+  }
+
+  // Persistent pre-on-demand versions do not expose this endpoint.
+  // Their launchd/systemd service is stopped immediately afterwards.
+  if (response.status === 404) return;
+  if (!response.ok) {
+    throw new Error(
+      `Could not stop the on-demand daemon: HTTP ${response.status}`,
+    );
+  }
+
+  const healthUrl = new URL("/healthz", endpoint);
+  const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     try {
-      await fetchHealth(endpoint);
-      return;
+      await fetch(healthUrl, {
+        signal: AbortSignal.timeout(500),
+      });
     } catch (error) {
-      lastError = error;
-      await new Promise((resolve) => setTimeout(resolve, 350));
+      if (
+        hasNodeErrorCode(error, "ECONNREFUSED") ||
+        hasNodeErrorCode(error, "ECONNRESET") ||
+        hasNodeErrorCode(error, "UND_ERR_SOCKET")
+      ) {
+        return;
+      }
     }
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
-  throw new Error(
-    `Background service did not become healthy: ${errorMessage(lastError)}`,
-  );
+  throw new Error("Timed out stopping the on-demand daemon.");
 }
 
 async function fetchHealth(endpoint: string): Promise<void> {
@@ -620,39 +738,10 @@ async function readOptionalServiceEnvironment(
   }
 }
 
-async function assertCompiledEntrypoint(path: string): Promise<void> {
-  try {
-    await readFile(path);
-  } catch (error) {
-    if (isNodeError(error, "ENOENT")) {
-      throw new Error(
-        "setup must run from the installed package or after npm run build.",
-      );
-    }
-    throw error;
-  }
-}
-
-async function stableNodePath(): Promise<string> {
-  for (const directory of (process.env.PATH ?? "").split(delimiter)) {
-    if (!directory) continue;
-    const candidate = join(directory, "node");
-    try {
-      await access(candidate, fsConstants.X_OK);
-      if ((await realpath(candidate)) === process.execPath) {
-        return candidate;
-      }
-    } catch {
-      // Continue until a PATH entry resolves to the running Node binary.
-    }
-  }
-  return process.execPath;
-}
-
 function assertServicePlatform(platform: NodeJS.Platform): void {
   if (platform !== "darwin" && platform !== "linux") {
     throw new Error(
-      `Automatic singleton setup supports macOS and Linux; got ${platform}.`,
+      `On-demand initialization supports macOS and Linux; got ${platform}.`,
     );
   }
 }
@@ -660,7 +749,7 @@ function assertServicePlatform(platform: NodeJS.Platform): void {
 async function promptHidden(prompt: string): Promise<string> {
   if (!process.stdin.isTTY || !process.stderr.isTTY) {
     throw new Error(
-      "Set READ_MY_CHATGPT_ACCESS_TOKEN when running setup non-interactively.",
+      "Set READ_MY_CHATGPT_ACCESS_TOKEN when running init non-interactively.",
     );
   }
   process.stderr.write(prompt);
@@ -686,7 +775,7 @@ async function promptHidden(prompt: string): Promise<string> {
         if (character === "\u0003") {
           cleanup();
           process.stderr.write("\n");
-          reject(new Error("Setup cancelled."));
+          reject(new Error("Initialization cancelled."));
           return;
         }
         if (character === "\u007f" || character === "\b") {
@@ -716,21 +805,48 @@ async function promptVisible(prompt: string): Promise<string> {
 function printHelp(): void {
   console.log(`${PRODUCT} ${CLI_VERSION}
 
-Read your own web conversation history through one local MCP singleton.
+Read your own web conversation history through one on-demand MCP runtime.
 
 Usage:
-  ${PRODUCT} setup [--port 47831] [--no-configure] [--yes]
+  ${PRODUCT} init [--port 47831] [--no-configure] [--yes]
   ${PRODUCT} configure [auto|all|${CLIENT_NAMES.join("|")} ...]
   ${PRODUCT} doctor [--json]
   ${PRODUCT} uninstall [--purge] [--yes]
+  ${PRODUCT} connect [--config PATH]
   ${PRODUCT} serve [--config PATH]
   ${PRODUCT} --version
 
 Running without a command starts a stdio MCP for legacy clients.
 
 Secrets:
-  setup prompts without echo. For automation, set
+  init prompts without echo. For automation, set
   READ_MY_CHATGPT_ACCESS_TOKEN in the environment.`);
+}
+
+function connectorLauncher(): {
+  command: string;
+  args: readonly string[];
+} {
+  return {
+    command: "npx",
+    args: ["-y", `${PRODUCT}@${PACKAGE_VERSION}`, "connect"],
+  };
+}
+
+function npxCommand(args: string): string {
+  return `npx -y ${PRODUCT}@${PACKAGE_VERSION} ${args}`;
+}
+
+function formatIdleDuration(milliseconds: number): string {
+  if (milliseconds % 60_000 === 0) {
+    const minutes = milliseconds / 60_000;
+    return `${minutes} minute${minutes === 1 ? "" : "s"}`;
+  }
+  if (milliseconds % 1_000 === 0) {
+    const seconds = milliseconds / 1_000;
+    return `${seconds} second${seconds === 1 ? "" : "s"}`;
+  }
+  return `${milliseconds} ms`;
 }
 
 function formatHost(host: string): string {
@@ -751,4 +867,26 @@ function isNodeError(error: unknown, code: string): boolean {
     "code" in error &&
     (error as NodeJS.ErrnoException).code === code
   );
+}
+
+function hasNodeErrorCode(error: unknown, code: string): boolean {
+  let current = error;
+  for (let depth = 0; depth < 5; depth += 1) {
+    if (
+      current instanceof Error &&
+      "code" in current &&
+      current.code === code
+    ) {
+      return true;
+    }
+    if (
+      typeof current !== "object" ||
+      current === null ||
+      !("cause" in current)
+    ) {
+      return false;
+    }
+    current = current.cause;
+  }
+  return false;
 }

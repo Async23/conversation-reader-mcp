@@ -9,7 +9,6 @@
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
-import { z } from "zod";
 import {
   ChatGPTApiError,
   ChatGPTAuthError,
@@ -32,6 +31,13 @@ import {
 } from "./conversation-assets.js";
 import { SERVICE_NAME } from "./install-paths.js";
 import { activeBranchTranscript } from "./transcript.js";
+import {
+  getAssetToolDefinition,
+  getConversationToolDefinition,
+  listConversationsToolDefinition,
+  readMyChatGptInstructions,
+  searchConversationsToolDefinition,
+} from "./tool-definitions.js";
 import { formatTimestamp } from "./timestamp.js";
 import { PACKAGE_VERSION } from "./version.js";
 
@@ -187,40 +193,15 @@ export function createReadMyChatGptMcpServer(
       version: PACKAGE_VERSION,
     },
     {
-      instructions:
-        `Conversation timestamps are formatted in ${config.outputTimezone}. ` +
-        "When reporting time to the user, prefer created_at and updated_at. " +
-        "The create_time and update_time fields are unmodified upstream values kept for compatibility.",
+      instructions: readMyChatGptInstructions(
+        config.outputTimezone,
+      ),
     },
   );
 
   server.registerTool(
     "list_conversations",
-    {
-      description:
-        `List your ChatGPT web Chat and Work conversations (metadata only: id, title, timestamps, experience). ` +
-        `created_at and updated_at are RFC 3339 timestamps in ${config.outputTimezone}; prefer them when reporting time. ` +
-        "create_time and update_time retain their upstream values for compatibility. Use when you need recent conversations or do not know a conversation_id. Does not return message bodies.",
-      inputSchema: {
-        offset: z
-          .number()
-          .int()
-          .min(0)
-          .optional()
-          .describe("Pagination offset (default 0)"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .optional()
-          .describe("Page size (default 28, max 50)"),
-        include_archived: z
-          .boolean()
-          .optional()
-          .describe("If true, list archived conversations only; default false (non-archived)"),
-      },
-    },
+    listConversationsToolDefinition(config.outputTimezone),
     async ({ offset, limit, include_archived }) => {
       try {
         const pageLimit = Math.min(
@@ -259,27 +240,7 @@ export function createReadMyChatGptMcpServer(
 
   server.registerTool(
     "get_conversation",
-    {
-      description:
-        `Fetch one completed ChatGPT Chat or Work conversation and return the active branch only (the current visible user/assistant turn chain). ` +
-        `created_at, updated_at, and messages[].created_at are RFC 3339 timestamps in ${config.outputTimezone}. ` +
-        "Text remains in messages[].content; links, web citations, Mermaid source, and image/file asset ids appear in messages[].rich_content when present. Internal reasoning, hidden events, and tool execution are omitted. Use get_asset to read an indexed image or file.",
-      inputSchema: {
-        conversation_id: z
-          .string()
-          .min(1)
-          .describe("Conversation id from list/search"),
-        max_messages: z
-          .number()
-          .int()
-          .min(1)
-          .max(500)
-          .optional()
-          .describe(
-            "Max visible user/assistant messages to return (default 100). Longer threads are truncated with head+tail kept.",
-          ),
-      },
-    },
+    getConversationToolDefinition(config.outputTimezone),
     async ({ conversation_id, max_messages }) => {
       try {
         const detail = await client.getConversation(conversation_id);
@@ -299,22 +260,7 @@ export function createReadMyChatGptMcpServer(
 
   server.registerTool(
     "get_asset",
-    {
-      description:
-        "Fetch one image or file attachment from a ChatGPT conversation. Use the conversation_id and asset_id returned by get_conversation in messages[].rich_content.assets. The asset must belong to the active visible branch; downloads are MIME-checked and size-limited.",
-      inputSchema: {
-        conversation_id: z
-          .string()
-          .min(1)
-          .describe("Conversation id used with get_conversation"),
-        asset_id: z
-          .string()
-          .regex(/^asset_[A-Za-z0-9_-]{32}$/)
-          .describe(
-            "Opaque asset id from messages[].rich_content.assets[].asset_id",
-          ),
-      },
-    },
+    getAssetToolDefinition(),
     async ({ conversation_id, asset_id }) => {
       try {
         const asset = await readConversationAsset(
@@ -332,29 +278,7 @@ export function createReadMyChatGptMcpServer(
 
   server.registerTool(
     "search_conversations",
-    {
-      description:
-        `Search your ChatGPT Chat and Work conversations by title only (MVP). ` +
-        `updated_at is an RFC 3339 timestamp in ${config.outputTimezone}; prefer it when reporting time. ` +
-        "Returns matching conversation ids, titles, and experience. For full dialogue content, call get_conversation next.",
-      inputSchema: {
-        query: z
-          .string()
-          .min(1)
-          .describe("Case-insensitive substring matched against conversation titles"),
-        limit: z
-          .number()
-          .int()
-          .min(1)
-          .max(50)
-          .optional()
-          .describe("Max hits to return (default 10)"),
-        include_archived: z
-          .boolean()
-          .optional()
-          .describe("Also scan archived titles if true (default false)"),
-      },
-    },
+    searchConversationsToolDefinition(config.outputTimezone),
     async ({ query, limit, include_archived }) => {
       try {
         const hitLimit = limit ?? 10;

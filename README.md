@@ -6,68 +6,70 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 把你自己的 ChatGPT Web 会话历史，以只读 MCP tools 提供给本机多个
-AI 客户端。一个后台 MCP server 共享一个 Obscura 浏览器进程，不会为每个
-客户端重复启动。
+AI 客户端。每个客户端只启动一个轻量 stdio connector；第一次调用 tool 时，
+connector 才按需启动一个共享 daemon 和一个 Obscura 浏览器进程。最后一次
+tool 调用完成后 10 分钟没有新调用，daemon 会自动退出。
 
 > [!WARNING]
 > 本项目使用 ChatGPT 的非公开 Web endpoint，不是 OpenAI 官方产品，也未获
 > OpenAI 认可或赞助。OpenAI 的使用条款限制自动或程序化提取数据或 Output；
 > 请先确认你的使用场景获得允许，并自行承担账号与合规风险。
 
-## 两条命令开始
+## 一次初始化
 
-要求 Node.js 22 或更高版本。一键后台服务支持：
+要求 Node.js 22 或更高版本。初始化和内置 Obscura 支持：
 
-| 操作系统 | CPU | 要求 |
-|---|---|---|
-| macOS | arm64、x64 | launchd |
-| Linux | arm64、x64 | systemd user、glibc 2.35+ |
+| 操作系统 | CPU |
+|---|---|
+| macOS | arm64、x64 |
+| Linux | arm64、x64（glibc 2.35+） |
 
-Windows、Alpine/musl 暂不支持一键后台服务；仍可自行提供兼容的 Obscura 并
-使用 stdio 模式。
+Windows、Alpine/musl 暂不支持 `init`；仍可自行提供兼容的 Obscura 并使用
+传统 stdio 模式。
 
 ```bash
-npm install -g read-my-chatgpt
-read-my-chatgpt setup
+npx -y read-my-chatgpt@latest init
 ```
 
-`setup` 会：
+`init` 会：
 
 1. 隐藏输入你的 ChatGPT Web access token；
 2. 从 Obscura 官方 GitHub Release 下载固定版本 `v0.1.10`，并校验
    SHA-256；
 3. 生成本机 MCP Bearer token，写入权限为 `0600` 的配置文件；
-4. 安装一个 launchd（macOS）或 systemd user（Linux）后台服务；
+4. 停止并删除旧版本遗留的 launchd / systemd user 常驻服务；
 5. 自动配置检测到的 Codex、Claude Code、Cursor、Gemini CLI、Grok CLI、
-   OpenCode 和 Pi。
+   OpenCode 和 Pi，让它们执行固定版本的
+   `npx -y read-my-chatgpt@<version> connect`。
 
 首次运行会先要求确认风险。自动化安装需同时显式设置环境变量并确认：
 
 ```bash
-READ_MY_CHATGPT_ACCESS_TOKEN='…' read-my-chatgpt setup --yes
+READ_MY_CHATGPT_ACCESS_TOKEN='…' \
+  npx -y read-my-chatgpt@latest init --yes
 ```
 
-完成后重启一次 AI 客户端。它们会共同连接：
-
-```text
-http://127.0.0.1:47831/mcp
-```
-
-服务只允许 loopback，不会监听局域网或公网。
+完成后重启一次 AI 客户端。MCP 初始化和 `tools/list` 只经过 connector，
+不会启动 daemon 或 Obscura。第一次 `tools/call` 才会启动共享 runtime；
+同一台电脑上的多个客户端会复用它。daemon 只监听 loopback，不会暴露到局域网
+或公网。
 
 ## 从旧包迁移
 
 如果本机安装过 `conversation-reader-mcp`：
 
 ```bash
-npm install -g read-my-chatgpt
-read-my-chatgpt setup --yes
+npx -y read-my-chatgpt@latest init --yes
 npm uninstall -g conversation-reader-mcp
 ```
 
-`setup` 会停止旧后台服务，把原有 token、Obscura、浏览器 profile 和日志迁移到
+`init` 会停止旧后台服务，把原有 token、Obscura、浏览器 profile 和日志迁移到
 `read-my-chatgpt` 路径，并把 AI 客户端中的 `conversation-reader` 条目替换为
 `read-my-chatgpt`。正常迁移不需要重新输入 token。
+
+从曾经使用常驻 HTTP 架构的 `read-my-chatgpt` 升级时，也只需重新运行
+`init`：它会卸载本项目旧的 launchd / systemd 服务，并把客户端切换为按需
+connector。
 
 ## 获取 access token
 
@@ -76,21 +78,22 @@ npm uninstall -g conversation-reader-mcp
 3. 找到任意 `/backend-api/*` 请求；
 4. 复制 `Authorization: Bearer …` 中 `Bearer ` 后面的内容。
 
-token 会过期。失效后重新运行 `read-my-chatgpt setup` 输入新 token，
-后台服务和客户端配置会一起更新。
+token 会过期。失效后重新运行 `npx -y read-my-chatgpt@latest init` 输入新
+token；本机配置和客户端 connector 版本会一起更新。
 
 不要把 token 提交到 Git、Issue、日志或聊天消息中。
 
 ## 输出时区
 
 MCP 默认以 UTC 输出 RFC 3339 时间，以保持现有调用兼容。若希望 AI 直接使用
-本地时间，可设置 IANA 时区并重新运行 `setup`：
+本地时间，可设置 IANA 时区并重新运行 `init`：
 
 ```bash
-READ_MY_CHATGPT_OUTPUT_TIMEZONE=Asia/Shanghai read-my-chatgpt setup --yes
+READ_MY_CHATGPT_OUTPUT_TIMEZONE=Asia/Shanghai \
+  npx -y read-my-chatgpt@latest init --yes
 ```
 
-已有安装会复用原来的 access token；后续再次运行 `setup` 也会保留这个配置。
+已有安装会复用原来的 access token；后续再次运行 `init` 也会保留这个配置。
 源码或 stdio 模式同样读取 `READ_MY_CHATGPT_OUTPUT_TIMEZONE`。例如上海时区会
 输出：
 
@@ -110,59 +113,57 @@ sidecar，两者用途不同。
 ## 日常命令
 
 ```bash
-# 检查 Node、配置权限、Obscura、后台服务和 HTTP endpoint
-read-my-chatgpt doctor
+# 检查 Node、配置权限、Obscura、旧常驻服务和按需 daemon 状态
+npx -y read-my-chatgpt@latest doctor
 
 # 输出便于脚本读取的诊断结果（不包含任何 token）
-read-my-chatgpt doctor --json
+npx -y read-my-chatgpt@latest doctor --json
 
 # 再次配置已检测到的客户端
-read-my-chatgpt configure
+npx -y read-my-chatgpt@latest configure
 
 # 指定客户端；也可以用 all 创建全部 7 份配置
-read-my-chatgpt configure codex cursor gemini
-read-my-chatgpt configure all
+npx -y read-my-chatgpt@latest configure codex cursor gemini
+npx -y read-my-chatgpt@latest configure all
 
-# 停止服务并从客户端移除 MCP 条目；默认保留 token 与浏览器 profile
-read-my-chatgpt uninstall
+# 停止遗留服务并从客户端移除 MCP 条目；默认保留 token 与浏览器 profile
+npx -y read-my-chatgpt@latest uninstall
 
 # 同时删除本项目保存的配置、token、Obscura 和 profile
-read-my-chatgpt uninstall --purge
+npx -y read-my-chatgpt@latest uninstall --purge
 ```
 
 修改客户端配置前会创建 `.bak` 备份；若 `.bak` 已存在，则创建带时间戳的新
-备份。因为客户端配置中会加入 MCP Bearer token，修改后的文件及备份都会
-收紧为 `0600`。
+备份。客户端配置中不再写入 access token 或 MCP Bearer token；敏感值只保存在
+本机 `service.json`。修改后的文件及备份仍会收紧为 `0600`。
 
 ## 支持的客户端
 
 | 客户端 | 默认配置文件 | 形式 |
 |---|---|---|
-| Codex | `~/.codex/config.toml` | Streamable HTTP `url` + `http_headers` |
-| Claude Code | `~/.claude.json` | `type: "http"` + `url` + `headers` |
-| Cursor | `~/.cursor/mcp.json` | `url` + `headers` |
-| Gemini CLI | `~/.gemini/settings.json` | `httpUrl` + `headers` |
-| Grok CLI | `~/.grok/config.toml` | `url` + `headers` |
-| OpenCode | `~/.config/opencode/opencode.json` | `type: "remote"` |
-| Pi | `~/.pi/agent/mcp.json` | `pi-mcp-adapter` remote 配置 |
+| Codex | `~/.codex/config.toml` | stdio `command` + `args` |
+| Claude Code | `~/.claude.json` | stdio `command` + `args` |
+| Cursor | `~/.cursor/mcp.json` | stdio `command` + `args` |
+| Gemini CLI | `~/.gemini/settings.json` | stdio `command` + `args` |
+| Grok CLI | `~/.grok/config.toml` | stdio `command` + `args` |
+| OpenCode | `~/.config/opencode/opencode.json` | `type: "local"` |
+| Pi | `~/.pi/agent/mcp.json` | `pi-mcp-adapter` local command |
 
-Pi 本身不内置 MCP；先执行 `pi install npm:pi-mcp-adapter`。`setup` 检测到该
+Pi 本身不内置 MCP；先执行 `pi install npm:pi-mcp-adapter`。`init` 检测到该
 adapter 后才会自动写入 Pi 配置。
 
-其他支持 Streamable HTTP 的 MCP 客户端可手动使用：
+其他支持 stdio MCP 的客户端可手动使用：
 
 ```json
 {
-  "url": "http://127.0.0.1:47831/mcp",
-  "headers": {
-    "Authorization": "Bearer <service.json 中生成的值>"
-  }
+  "command": "npx",
+  "args": ["-y", "read-my-chatgpt@<初始化时的版本>", "connect"]
 }
 ```
 
-Bearer token 保存在
-`~/.config/read-my-chatgpt/service.json`。不要把该文件分享给别人；
-分享的是 npm 包或 GitHub 仓库，不是你的本机配置。
+connector 会读取 `~/.config/read-my-chatgpt/service.json`。该文件保存 access
+token 和 daemon 内部使用的 Bearer token；不要分享它。分享的是 npm 包或
+GitHub 仓库，不是你的本机配置。
 
 ## MCP tools
 
@@ -216,19 +217,29 @@ MCP embedded `resource` 返回。默认单个资产上限为 10 MiB，可用
 ```text
 Codex / Claude / Cursor / Gemini / Grok / OpenCode / Pi
                          │
-             Streamable HTTP + Bearer
+       每个客户端 1 个轻量 stdio connector
+             （initialize / tools/list 本地完成）
                          │
-             127.0.0.1:47831/mcp
+                  第一次 tools/call
                          │
-             1 个 Node MCP singleton
+       1 个共享的按需 Node daemon（loopback HTTP）
                          │
              1 个 Obscura sidecar
                          │
        chatgpt.com/backend-api（只读白名单）
 ```
 
-每个客户端有独立 MCP session，但共享同一个上游浏览器 runtime。ChatGPT
-access token 只经本机 CDP 注入页面内 XHR，不放进 Obscura argv 或日志。
+connector 进程随各客户端启动和退出，但不持有浏览器资源。daemon 中每个
+connector 有独立 MCP session，同时共享一个上游浏览器 runtime。最后一次
+tool 调用完成后，10 分钟没有新 tool 调用，daemon 和 Obscura 会退出；即使
+client 仍保持连接也一样。下一次调用会透明地重新启动并重连。
+
+`tools/list`、ping 和其他握手流量不会延长这 10 分钟。正在执行的 tool 不会被
+空闲定时器中断；计时从最后一个并发 tool 完成后开始。可用
+`READ_MY_CHATGPT_DAEMON_IDLE_MS` 调整超时。
+
+ChatGPT access token 只经本机 CDP 注入页面内 XHR，不放进 Obscura argv 或
+日志。
 
 允许的上游 endpoint 只有：
 
@@ -254,16 +265,13 @@ GET /backend-api/files/download/{file_id}?conversation_id={id}&inline=false
 ~/.local/share/read-my-chatgpt/obscura-profile/
 ```
 
-`service.json` 含 access token 与 MCP Bearer token；
+`service.json` 含 access token 与 daemon 内部 Bearer token；
 `obscura-profile/` 可能含 cookie 和 localStorage，两者都应按账号敏感数据保护。
 项目不提供云端中转，也不会遥测上传这些数据。
 
-macOS 日志位于
-`~/Library/Logs/read-my-chatgpt{,.error}.log`。Linux 使用：
-
-```bash
-journalctl --user -u read-my-chatgpt.service
-```
+`init` 不安装 launchd / systemd 服务，也不会让 daemon 在没有 tool 调用时
+常驻。旧版本遗留的日志会保留到执行 `uninstall --purge`，以避免升级时意外
+删除诊断资料。
 
 ## 兼容 stdio
 
@@ -300,7 +308,7 @@ npm run smoke:stability
 ## 安全与依赖
 
 - 安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
-- Obscura 由其官方 Release 在首次 setup 时单独下载，不包含在 npm tarball 中；
+- Obscura 由其官方 Release 在首次 `init` 时单独下载，不包含在 npm tarball 中；
   版本、校验值和许可证信息见
   [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 - OpenAI 使用条款与品牌规范可能变化，请以

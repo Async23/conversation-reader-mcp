@@ -2,7 +2,6 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 export const SERVICE_NAME = "read-my-chatgpt";
-export const SERVICE_DISPLAY_NAME = "Read My ChatGPT";
 export const MCP_SERVER_NAME = "read-my-chatgpt";
 export const LAUNCHD_LABEL = "io.github.async23.read-my-chatgpt";
 export const LEGACY_SERVICE_NAME = "conversation-reader-mcp";
