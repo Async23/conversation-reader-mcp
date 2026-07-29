@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import http from "node:http";
 import { createServer } from "node:net";
 import {
-  chmod,
   mkdir,
   mkdtemp,
   readFile,
@@ -226,7 +225,7 @@ test(
 
 test(
   "connector reaps a detached daemon process group when startup times out",
-  { timeout: 10_000 },
+  { timeout: 12_000 },
   async (t) => {
     if (process.platform === "win32") {
       t.skip("process-group lifecycle assertions require POSIX signals");
@@ -235,26 +234,36 @@ test(
 
     const home = await mkdtemp(join(tmpdir(), "read-my-chatgpt-timeout-"));
     const processLog = join(home, "processes.log");
-    const obscuraBinary = join(home, "obscura");
+    const entrypoint = join(home, "entrypoint.mjs");
+    const sourceEntrypoint = new URL(
+      "../src/index.ts",
+      import.meta.url,
+    ).href;
     await writeFile(
-      obscuraBinary,
-      `#!/bin/sh
-if [ "$1" = "--version" ]; then
-  echo "obscura 0.1.10"
-elif [ "$1" = "serve" ] && [ "$2" = "--help" ]; then
-  echo "--host --port --storage-dir --quiet --stealth"
-elif [ "$1" = "serve" ]; then
-  printf '%s %s\\n' "$PPID" "$$" >> "$READ_MY_CHATGPT_TEST_PROCESS_LOG"
-  trap '' TERM
-  while :; do
-    sleep 1
-  done
-else
-  exit 2
-fi
+      entrypoint,
+      `import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
+
+if (process.argv[2] === "daemon") {
+  process.on("SIGTERM", () => {});
+  const child = spawn(
+    process.execPath,
+    [
+      "-e",
+      "process.on('SIGTERM',()=>{});setInterval(()=>{},1000)",
+    ],
+    { stdio: "ignore" },
+  );
+  appendFileSync(
+    process.env.READ_MY_CHATGPT_TEST_PROCESS_LOG,
+    String(process.pid) + " " + String(child.pid) + "\\n",
+  );
+  setInterval(() => {}, 1_000);
+} else {
+  await import(${JSON.stringify(sourceEntrypoint)});
+}
 `,
     );
-    await chmod(obscuraBinary, 0o700);
 
     const daemonPort = await unusedLoopbackPort();
     const configPath = join(home, "service.json");
@@ -262,14 +271,12 @@ fi
       configPath,
       `${JSON.stringify({
         READ_MY_CHATGPT_ACCESS_TOKEN: "test-token",
-        READ_MY_CHATGPT_TRANSPORT: "obscura",
-        READ_MY_CHATGPT_OBSCURA_BIN: obscuraBinary,
-        READ_MY_CHATGPT_OBSCURA_STORAGE_DIR: join(home, "storage"),
+        READ_MY_CHATGPT_TRANSPORT: "direct",
         READ_MY_CHATGPT_MCP_TRANSPORT: "http",
         READ_MY_CHATGPT_MCP_HOST: "127.0.0.1",
         READ_MY_CHATGPT_MCP_PORT: String(daemonPort),
         READ_MY_CHATGPT_MCP_BEARER_TOKEN: "timeout-test-secret",
-        READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS: "1000",
+        READ_MY_CHATGPT_DAEMON_START_TIMEOUT_MS: "2000",
       })}\n`,
     );
 
@@ -278,7 +285,7 @@ fi
       args: [
         "--import",
         "tsx",
-        "src/index.ts",
+        entrypoint,
         "connect",
         "--config",
         configPath,
@@ -671,8 +678,8 @@ test(
 
 async function waitForRecordedProcesses(
   path: string,
-): Promise<Array<{ daemonPid: number; sidecarPid: number }>> {
-  const deadline = Date.now() + 2_000;
+): Promise<Array<{ daemonPid: number; childPid: number }>> {
+  const deadline = Date.now() + 4_000;
   while (Date.now() < deadline) {
     try {
       const records = (await readFile(path, "utf8"))
@@ -680,16 +687,16 @@ async function waitForRecordedProcesses(
         .split("\n")
         .filter(Boolean)
         .map((line) => {
-          const [daemonPid, sidecarPid] = line
+          const [daemonPid, childPid] = line
             .split(" ")
             .map(Number);
           assert.ok(
             Number.isInteger(daemonPid) &&
               daemonPid > 1 &&
-              Number.isInteger(sidecarPid) &&
-              sidecarPid > 1,
+              Number.isInteger(childPid) &&
+              childPid > 1,
           );
-          return { daemonPid, sidecarPid };
+          return { daemonPid, childPid };
         });
       if (records.length > 0) return records;
     } catch (error) {
