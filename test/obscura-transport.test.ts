@@ -18,12 +18,13 @@ import { ObscuraChatGPTTransport } from "../src/transport/obscura-transport.js";
 type CdpCommand = {
   id: number;
   method: string;
-  params?: { expression?: string };
+  params?: { expression?: string; timeout?: number };
 };
 
 test("Obscura transport uses authenticated XHR instead of fetch", async (t) => {
   let browserWebSocketUrl = "";
   const requestExpressions: string[] = [];
+  const requestTimeouts: Array<number | undefined> = [];
   const chunkExpressions: string[] = [];
   let stagedBody = "";
   const backendBody =
@@ -58,6 +59,7 @@ test("Obscura transport uses authenticated XHR instead of fetch", async (t) => {
           let value: string;
           if (expression.includes("new XMLHttpRequest")) {
             requestExpressions.push(expression);
+            requestTimeouts.push(command.params?.timeout);
             if (expression.includes("timeout-case")) return;
             if (expression.includes('responseType="blob"')) {
               stagedBody = binaryBody.toString("base64");
@@ -144,6 +146,7 @@ test("Obscura transport uses authenticated XHR instead of fetch", async (t) => {
   assert.match(requestExpression, /Authorization/);
   assert.match(requestExpression, /xhr\.timeout=25/);
   assert.doesNotMatch(requestExpression, /\bfetch\(/);
+  assert.equal(requestTimeouts.at(-1), 25);
 
   const binary = await transport.getBinary(
     "https://files.example.com/signed/image?token=private",
@@ -155,6 +158,7 @@ test("Obscura transport uses authenticated XHR instead of fetch", async (t) => {
   assert.match(binaryExpression, /responseType=\"blob\"/);
   assert.match(binaryExpression, /xhr\.withCredentials=false/);
   assert.doesNotMatch(binaryExpression, /Authorization/);
+  assert.equal(requestTimeouts.at(-1), 25);
 
   await assert.rejects(
     () =>
@@ -175,6 +179,7 @@ test("Obscura transport uses authenticated XHR instead of fetch", async (t) => {
   const timeoutExpression = requestExpressions.at(-1) ?? "";
   assert.match(timeoutExpression, /new XMLHttpRequest/);
   assert.match(timeoutExpression, /xhr\.timeout=25/);
+  assert.equal(requestTimeouts.at(-1), 25);
 
   await assert.rejects(
     () => transport.get("/backend-api/conversations/batch"),

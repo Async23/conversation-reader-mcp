@@ -400,8 +400,10 @@ function assertAllowedBackendUrl(
 function isRuntimeEvaluateTimeout(error: unknown): boolean {
   return (
     error instanceof Error &&
-    error.message ===
-      "Obscura CDP command timed out: Runtime.evaluate"
+    (error.message ===
+      "Obscura CDP command timed out: Runtime.evaluate" ||
+      (/Runtime\.evaluate/i.test(error.message) &&
+        /\b(?:exceeded|timed out|timeout)\b/i.test(error.message)))
   );
 }
 
@@ -672,7 +674,12 @@ export class ObscuraChatGPTTransport implements ChatGPTTransport {
       "})";
     const evaluated = await this.cdp.send<EvaluateResult>(
       "Runtime.evaluate",
-      { expression, awaitPromise: true, returnByValue: true },
+      {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        timeout: this.requestTimeoutMs,
+      },
       this.sessionId,
       this.requestTimeoutMs + 1_000,
     );
@@ -849,7 +856,12 @@ export class ObscuraChatGPTTransport implements ChatGPTTransport {
 
     const evaluated = await this.cdp.send<EvaluateResult>(
       "Runtime.evaluate",
-      { expression, awaitPromise: true, returnByValue: true },
+      {
+        expression,
+        awaitPromise: true,
+        returnByValue: true,
+        timeout: this.requestTimeoutMs,
+      },
       this.sessionId,
       this.requestTimeoutMs + 1_000,
     );
