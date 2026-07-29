@@ -29,17 +29,39 @@ function inheritedEnvironment(): Record<string, string> {
   );
 }
 
+let nextLoopbackPort = 20_000 + (process.pid % 10_000);
+
 async function unusedLoopbackPort(): Promise<number> {
-  const server = createServer();
-  await new Promise<void>((resolve) =>
-    server.listen(0, "127.0.0.1", resolve),
-  );
-  const address = server.address();
-  assert.ok(address && typeof address === "object");
-  await new Promise<void>((resolve, reject) =>
-    server.close((error) => (error ? reject(error) : resolve())),
-  );
-  return address.port;
+  for (let attempt = 0; attempt < 1_000; attempt += 1) {
+    const port = nextLoopbackPort;
+    nextLoopbackPort =
+      nextLoopbackPort === 29_999 ? 20_000 : nextLoopbackPort + 1;
+    const server = createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const onError = (error: Error) => reject(error);
+        server.once("error", onError);
+        server.listen(port, "127.0.0.1", () => {
+          server.off("error", onError);
+          resolve();
+        });
+      });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "EADDRINUSE"
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    await new Promise<void>((resolve, reject) =>
+      server.close((error) => (error ? reject(error) : resolve())),
+    );
+    return port;
+  }
+  throw new Error("Could not find an unused loopback test port");
 }
 
 function parseTextResult(
