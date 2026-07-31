@@ -144,9 +144,26 @@ test(
     const listTool = tools.tools.find(
       (tool) => tool.name === "list_conversations",
     );
+    const instructions = client.getInstructions() ?? "";
+    assert.match(
+      instructions,
+      /authenticated user's ChatGPT Web account at chatgpt\.com/,
+    );
+    assert.match(
+      instructions,
+      /only when the requested data source is ChatGPT Web history/,
+    );
     assert.match(
       listTool?.description ?? "",
       /created_at and updated_at are RFC 3339 timestamps in UTC/,
+    );
+    assert.match(
+      listTool?.description ?? "",
+      /Use only for ChatGPT Web history/,
+    );
+    assert.doesNotMatch(
+      listTool?.description ?? "",
+      /Use when you need recent conversations/,
     );
     assert.match(
       JSON.stringify(listTool?.inputSchema),

@@ -358,24 +358,49 @@ test("MCP tools preserve archive, pagination, and upstream error semantics", asy
       },
     );
 
-    await t.test("advertises tools and configured timestamp semantics", async () => {
-      const tools = await client.listTools();
-      assert.deepEqual(
-        tools.tools.map((tool) => tool.name).sort(),
-        [
-          "get_asset",
-          "get_conversation",
-          "list_conversations",
-          "search_conversations",
-        ],
-      );
-      assert.match(client.getInstructions() ?? "", /Asia\/Shanghai/);
-      assert.match(
-        tools.tools.find((tool) => tool.name === "list_conversations")
-          ?.description ?? "",
-        /created_at and updated_at are RFC 3339 timestamps in Asia\/Shanghai/,
-      );
-    });
+    await t.test(
+      "advertises ChatGPT Web scope and configured timestamp semantics",
+      async () => {
+        const tools = await client.listTools();
+        assert.deepEqual(
+          tools.tools.map((tool) => tool.name).sort(),
+          [
+            "get_asset",
+            "get_conversation",
+            "list_conversations",
+            "search_conversations",
+          ],
+        );
+        const instructions = client.getInstructions() ?? "";
+        assert.match(
+          instructions,
+          /authenticated user's ChatGPT Web account at chatgpt\.com/,
+        );
+        assert.match(
+          instructions,
+          /only when the requested data source is ChatGPT Web history/,
+        );
+        assert.match(instructions, /Asia\/Shanghai/);
+        for (const tool of tools.tools) {
+          assert.match(tool.description ?? "", /ChatGPT Web/);
+        }
+        const listDescription =
+          tools.tools.find((tool) => tool.name === "list_conversations")
+            ?.description ?? "";
+        assert.match(
+          listDescription,
+          /Use only for ChatGPT Web history/,
+        );
+        assert.match(
+          listDescription,
+          /created_at and updated_at are RFC 3339 timestamps in Asia\/Shanghai/,
+        );
+        assert.doesNotMatch(
+          listDescription,
+          /Use when you need recent conversations/,
+        );
+      },
+    );
 
     await t.test("returns image assets as MCP image content", async () => {
       const result = await client.callTool({

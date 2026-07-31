@@ -5,7 +5,9 @@ export function readMyChatGptInstructions(
   onDemand = false,
 ): string {
   const base =
-    `Conversation timestamps are formatted in ${timeZone}. ` +
+    "This server provides read-only access to conversations stored in the authenticated user's ChatGPT Web account at chatgpt.com. " +
+    "Use these tools only when the requested data source is ChatGPT Web history. " +
+    `Returned conversation timestamps are formatted in ${timeZone}. ` +
     "When reporting time to the user, prefer created_at and updated_at. " +
     "The create_time and update_time fields are unmodified upstream values kept for compatibility.";
   return onDemand
@@ -16,9 +18,10 @@ export function readMyChatGptInstructions(
 export function listConversationsToolDefinition(timeZone: string) {
   return {
     description:
-      `List your ChatGPT web Chat and Work conversations (metadata only: id, title, timestamps, experience). ` +
+      `List Chat and Work conversation metadata stored in the authenticated user's ChatGPT Web account at chatgpt.com (id, title, timestamps, experience). ` +
+      "Use only for ChatGPT Web history, such as finding a recent ChatGPT Web conversation or obtaining a conversation_id. Does not return message bodies. " +
       `created_at and updated_at are RFC 3339 timestamps in ${timeZone}; prefer them when reporting time. ` +
-      "create_time and update_time retain their upstream values for compatibility. Use when you need recent conversations or do not know a conversation_id. Does not return message bodies.",
+      "create_time and update_time retain their upstream values for compatibility.",
     inputSchema: {
       offset: z
         .number()
@@ -46,14 +49,14 @@ export function listConversationsToolDefinition(timeZone: string) {
 export function getConversationToolDefinition(timeZone: string) {
   return {
     description:
-      `Fetch one completed ChatGPT Chat or Work conversation and return the active branch only (the current visible user/assistant turn chain). ` +
+      `Fetch one completed Chat or Work conversation from the authenticated user's ChatGPT Web account at chatgpt.com and return the active branch only (the current visible user/assistant turn chain). ` +
       `created_at, updated_at, and messages[].created_at are RFC 3339 timestamps in ${timeZone}. ` +
       "Text remains in messages[].content; links, web citations, Mermaid source, and image/file asset ids appear in messages[].rich_content when present. Internal reasoning, hidden events, and tool execution are omitted. Use get_asset to read an indexed image or file.",
     inputSchema: {
       conversation_id: z
         .string()
         .min(1)
-        .describe("Conversation id from list/search"),
+        .describe("ChatGPT Web conversation id from list/search"),
       max_messages: z
         .number()
         .int()
@@ -70,12 +73,12 @@ export function getConversationToolDefinition(timeZone: string) {
 export function getAssetToolDefinition() {
   return {
     description:
-      "Fetch one image or file attachment from a ChatGPT conversation. Use the conversation_id and asset_id returned by get_conversation in messages[].rich_content.assets. The asset must belong to the active visible branch; downloads are MIME-checked and size-limited.",
+      "Fetch one image or file attachment from a conversation stored in the authenticated user's ChatGPT Web account at chatgpt.com. Use the conversation_id and asset_id returned by get_conversation in messages[].rich_content.assets. The asset must belong to the active visible branch; downloads are MIME-checked and size-limited.",
     inputSchema: {
       conversation_id: z
         .string()
         .min(1)
-        .describe("Conversation id used with get_conversation"),
+        .describe("ChatGPT Web conversation id used with get_conversation"),
       asset_id: z
         .string()
         .regex(/^asset_[A-Za-z0-9_-]{32}$/)
@@ -91,7 +94,8 @@ export function searchConversationsToolDefinition(
 ) {
   return {
     description:
-      `Search your ChatGPT Chat and Work conversations by title only (MVP). ` +
+      `Search Chat and Work conversation titles stored in the authenticated user's ChatGPT Web account at chatgpt.com (title-only MVP). ` +
+      "Use only for ChatGPT Web history. " +
       `updated_at is an RFC 3339 timestamp in ${timeZone}; prefer it when reporting time. ` +
       "Returns matching conversation ids, titles, and experience. For full dialogue content, call get_conversation next.",
     inputSchema: {
@@ -99,7 +103,7 @@ export function searchConversationsToolDefinition(
         .string()
         .min(1)
         .describe(
-          "Case-insensitive substring matched against conversation titles",
+          "Case-insensitive substring matched against ChatGPT Web conversation titles",
         ),
       limit: z
         .number()
