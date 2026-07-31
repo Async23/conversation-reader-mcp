@@ -4,6 +4,14 @@
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-07-31
+
+### Fixed
+
+- Scope MCP server instructions and tool descriptions to the authenticated
+  ChatGPT Web account so agents do not confuse them with the active client's
+  local session or command history.
+
 ## [0.4.0] - 2026-07-29
 
 ### Added
@@ -107,7 +115,8 @@
   CLI, OpenCode, and Pi.
 - Read-only conversation listing, retrieval, and title search tools.
 
-[Unreleased]: https://github.com/Async23/read-my-chatgpt/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Async23/read-my-chatgpt/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/Async23/read-my-chatgpt/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/Async23/read-my-chatgpt/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/Async23/read-my-chatgpt/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/Async23/read-my-chatgpt/compare/v0.2.0...v0.2.1
